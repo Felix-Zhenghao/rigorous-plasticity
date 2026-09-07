@@ -1,0 +1,33 @@
+# Controlled IID-normal variant of S05. Offset sweeps share seed and exact inputs/residuals.
+paradigm: class_remap
+data:
+  dataset: mnist
+  validation_fraction: 0.1
+  normalization: unit_interval
+  augmentation: none
+  num_tasks: 1
+  first_mapping: identity
+  pool_size: 1000
+  pool_refresh: fixed
+  task_samples: pool
+  chunk_size: task
+  epochs: null
+  updates: 2000
+  sampling: without_replacement
+  target_mode: fixed_regression
+  target_family: iid_normal
+  target_mean: 8
+  target_scale: 1
+  center_targets: true
+model: {name: mlp, hidden_sizes: [100, 100], activation: relu}
+method: {name: backprop}
+optimizer: {name: adam, lr: 0.001}
+trainer:
+  batch_size: 128
+  lr_schedule: constant
+  eval_every_updates: 100
+  checkpoint_every_updates: 500
+seed: 0
+device: cpu
+data_root: ./data
+output_dir: ./runs/s05_pretrain

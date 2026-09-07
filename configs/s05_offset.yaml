@@ -1,0 +1,12 @@
+paradigm: offset_refit
+probe:
+  target_offsets: [same, 0]
+  updates: 2000
+  batch_size: 512
+  eval_every_updates: 100
+  repeats: 3
+  load_optimizer_state: false
+  fresh_reference: true
+  optimizer: {name: adam, lr: 0.001}
+seed: 0
+device: cpu

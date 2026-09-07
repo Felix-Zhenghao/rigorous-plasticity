@@ -1,0 +1,7 @@
+kind: experiments
+recipes: [configs/smoke.yaml]
+grid:
+  method.name: [backprop, layer_norm, leaky_relu]
+seeds: [0, 1, 2]
+device: cpu
+output_dir: runs/supervised_suite

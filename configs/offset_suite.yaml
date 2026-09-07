@@ -1,0 +1,7 @@
+kind: experiments
+recipes: [configs/s05_pretrain.yaml]
+grid:
+  data.target_mean: [0, 8, 16, 32]
+seeds: [0, 1, 2]
+probes: [configs/s05_offset.yaml]
+output_dir: runs/offset_suite

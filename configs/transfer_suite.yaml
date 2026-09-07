@@ -1,0 +1,6 @@
+kind: transfer_branches
+source_recipe: configs/s16_transfer.yaml
+# This recipe consumes 10000 source updates before beginning target training.
+source_update: 10000
+target_sizes: [0.1, 0.5, all]
+output_dir: runs/transfer_suite

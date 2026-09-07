@@ -1,0 +1,26 @@
+# S12 with a fixed full output head and continuous optimizer/LR state: an adaptation of P09/P13.
+paradigm: class_incremental
+data:
+  dataset: cifar100
+  validation_fraction: 0.1
+  normalization: dataset_stats
+  augmentation: random_crop_flip
+  progression: classes
+  stage_sizes: [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100]
+  class_order: random
+  task_samples: pool
+  chunk_size: task
+  epochs: 10
+  sampling: without_replacement
+model: {name: resnet_18, stem: small}
+method: {name: backprop}
+optimizer: {name: sgd, lr: 0.01, momentum: 0.9}
+trainer:
+  batch_size: 128
+  lr_schedule: constant
+  eval_every_updates: 1000
+  checkpoint_every_updates: 1000
+seed: 0
+device: cpu
+data_root: ./data
+output_dir: ./runs/s12_class_incremental

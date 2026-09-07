@@ -1,0 +1,23 @@
+# A small, learnable, offline end-to-end check.
+paradigm: pixel_permutation
+data:
+  dataset: synthetic
+  data_options: {n_train: 64, n_test: 16, num_classes: 4, input_shape: [1, 4, 4]}
+  validation_fraction: 0.25
+  num_tasks: 2
+  task_samples: 16
+  chunk_size: 8
+  epochs: 2
+  first_permutation: identity
+model: {name: mlp, hidden_sizes: [16, 16], activation: relu}
+method: {name: backprop}
+optimizer: {name: adam, lr: 0.01}
+trainer:
+  batch_size: 4
+  eval_every_updates: 4
+  checkpoint_every_updates: 4
+  seen_input_capacity: 32
+seed: 0
+device: cpu
+data_root: ./data
+output_dir: ./runs/smoke

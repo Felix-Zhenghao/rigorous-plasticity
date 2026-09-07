@@ -1,0 +1,41 @@
+# S12 with a fixed full head. ViT capacity follows P13; FIRE follows P16's Q/K-only scope.
+# The 1000-update cadence and keeping optimizer moments are explicit testbed choices.
+paradigm: class_incremental
+data:
+  dataset: cifar100
+  validation_fraction: 0.1
+  normalization: dataset_stats
+  augmentation: random_crop_flip
+  progression: classes
+  stage_sizes: [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100]
+  class_order: random
+  task_samples: pool
+  chunk_size: task
+  epochs: 10
+  sampling: without_replacement
+model:
+  name: vit
+  preset: p13_vit
+  patch_embedding: conv
+  normalization_layout: pre_norm
+  attention_dropout: 0.0
+  embedding_dropout: 0.0
+  feedforward_dropout: 0.0
+  ln_gain: standard
+  initialization: kaiming_uniform
+method:
+  name: fire
+  every_updates: 1000
+  iterations: 10
+  eps: 1.0e-12
+  optimizer_state: keep
+optimizer: {name: adam, lr: 0.001, weight_decay: 0}
+trainer:
+  batch_size: 128
+  lr_schedule: constant
+  eval_every_updates: 1000
+  checkpoint_every_updates: 1000
+seed: 0
+device: cpu
+data_root: ./data
+output_dir: ./runs/s12_vit_fire

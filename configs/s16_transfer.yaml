@@ -1,0 +1,29 @@
+# CIFAR-10 -> SVHN target-only transfer. Native IDs deliberately share ten output units.
+paradigm: class_incremental
+data:
+  dataset: cifar10
+  target_dataset: svhn
+  validation_fraction: 0.1
+  resize: [32, 32]
+  normalization: unit_interval
+  augmentation: none
+  progression: transfer
+  stage_sizes: [all, 0.1]
+  transition: abrupt
+  task_samples: pool
+  chunk_size: task
+  epochs: [null, 25]
+  updates: [10000, null]
+  sampling: without_replacement
+model: {name: resnet_18, stem: small}
+method: {name: backprop}
+optimizer: {name: adam, lr: 0.001}
+trainer:
+  batch_size: 128
+  lr_schedule: constant
+  eval_every_updates: 1000
+  checkpoint_every_updates: 1000
+seed: 0
+device: cpu
+data_root: ./data
+output_dir: ./runs/s16_transfer

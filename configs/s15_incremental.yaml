@@ -1,0 +1,27 @@
+# Cumulative example availability; each stage size is a total, with no removal of old examples.
+paradigm: class_incremental
+data:
+  dataset: cifar10
+  validation_fraction: 0.1
+  normalization: dataset_stats
+  augmentation: none
+  progression: examples
+  stage_sizes: [1000, 2000, 5000, 10000, 25000, 45000]
+  arrival_order: iid
+  transition: abrupt
+  task_samples: pool
+  chunk_size: task
+  epochs: 20
+  sampling: without_replacement
+model: {name: resnet_18, stem: small}
+method: {name: backprop}
+optimizer: {name: adam, lr: 0.001}
+trainer:
+  batch_size: 128
+  lr_schedule: constant
+  eval_every_updates: 500
+  checkpoint_every_updates: 500
+seed: 0
+device: cpu
+data_root: ./data
+output_dir: ./runs/s15_incremental

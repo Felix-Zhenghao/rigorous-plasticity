@@ -1,0 +1,27 @@
+# Half-to-full cumulative fitting (P01/P02 setting), with explicit illustrative fitting budgets.
+paradigm: class_incremental
+data:
+  dataset: cifar10
+  validation_fraction: 0.1
+  normalization: dataset_stats
+  augmentation: none
+  progression: examples
+  stage_sizes: [0.5, 1.0]
+  arrival_order: iid
+  transition: abrupt
+  task_samples: pool
+  chunk_size: task
+  epochs: 25
+  sampling: without_replacement
+model: {name: resnet_18, stem: small}
+method: {name: backprop}
+optimizer: {name: adam, lr: 0.001}
+trainer:
+  batch_size: 128
+  lr_schedule: constant
+  eval_every_updates: 500
+  checkpoint_every_updates: 500
+seed: 0
+device: cpu
+data_root: ./data
+output_dir: ./runs/s13_expansion

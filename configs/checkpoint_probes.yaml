@@ -1,0 +1,6 @@
+kind: checkpoint_probes
+probe_config: configs/s03_teacher.yaml
+checkpoints: [runs/pixel_online/checkpoints/update_*.pt]
+repeat_seeds: [0, 1, 2]
+device: cpu
+output_dir: runs/checkpoint_probes

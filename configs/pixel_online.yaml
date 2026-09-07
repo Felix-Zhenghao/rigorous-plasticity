@@ -1,0 +1,28 @@
+# Requested illustrative 1,000-task / 100,000-update stream; not a paper reproduction.
+paradigm: pixel_permutation
+data:
+  dataset: mnist
+  validation_fraction: 0
+  normalization: unit_interval
+  augmentation: none
+  num_tasks: 1000
+  pool_size: null
+  pool_refresh: fixed
+  task_samples: 100
+  chunk_size: 1
+  epochs: 1
+  sampling: without_replacement
+  permutation_axes: spatial
+model: {name: mlp, hidden_sizes: [2000, 2000, 2000], activation: relu}
+method: {name: backprop}
+optimizer: {name: sgd, lr: 0.01}
+trainer:
+  batch_size: 1
+  lr_schedule: constant
+  eval_splits: [test]
+  eval_every_updates: 10000
+  checkpoint_every_updates: 10000
+seed: 0
+device: cpu
+data_root: ./data
+output_dir: ./runs/pixel_online
