@@ -6,3 +6,7 @@ __pycache__/
 /data/
 runs/
 .ruff_cache/
+Design-Towards More Rigorous Loss of Plasticity Research.pdf
+existing-setting-organization.md
+papers/
+testbed-impl-plan.md
