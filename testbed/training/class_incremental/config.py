@@ -55,7 +55,10 @@ class ClassIncrementalConfig:
             False preserves its sampled arrival order on every pass.
         class_probs: None draws uniformly from the eligible pool. Otherwise supply
             probabilities summing to 1 in sorted final output-ID order, or one row per
-            stage; unavailable classes need zero probability. Class quotas are rounded
+            stage. With progression="classes", probabilities are automatically masked
+            to classes present in the stage's eligible pool and renormalized; at least
+            one such class must have positive probability. Other progressions require
+            unavailable classes to have zero probability. Class quotas are rounded
             without replacement. Smooth transitions require None.
         class_order: List of distinct native source class IDs, or "random"/None for
             a seeded random order. "classes" may list a subset; "examples"/"transfer"
@@ -70,8 +73,9 @@ class ClassIncrementalConfig:
             uses the expanded pool with probability alpha. "linear" ramps alpha from 0
             to 1; "exponential" uses 1 - transition_gamma**(50*k/transition_chunks);
             "explicit" uses alpha_values. Here k is the one-based arrival chunk.
-            Smooth transitions require replacement sampling; stage 0 has no transition
-            and transfer permits only "abrupt".
+            Without replacement, remove each arrival from both pools; if the old pool
+            is exhausted, draw from the remaining expanded pool regardless of alpha.
+            Stage 0 has no transition and transfer permits only "abrupt".
         transition_chunks: Positive duration in arrival chunks, scalar or per stage.
             Smooth stages must contain at least this many chunks; linear needs >=2.
             After the duration, alpha=1. Abrupt stages ignore the duration.
@@ -170,8 +174,8 @@ class ClassIncrementalConfig:
                 if (i == 0 or transition != "explicit") and self.alpha_values[i] is not None:
                     raise ValueError("alpha_values entries must be null for stages without an explicit transition")
             if i > 0 and transition != "abrupt":
-                if self.sampling != "with_replacement" or self.class_probs is not None:
-                    raise ValueError("Smooth mixtures require replacement sampling and class_probs=null")
+                if self.class_probs is not None:
+                    raise ValueError("Smooth mixtures require class_probs=null")
                 if transition == "linear" and chunks < 2:
                     raise ValueError("Linear transitions require at least two chunks")
                 if transition == "explicit":

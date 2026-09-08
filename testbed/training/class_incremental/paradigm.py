@@ -147,10 +147,17 @@ class ClassIncremental:
         if index > 0 and transition != "abrupt":
             duration = scheduled(config.transition_chunks, index, config.num_tasks, "transition_chunks")
             indices = mixture_arrivals(self.stage_pools[index - 1], pool, count, chunk, transition, duration,
-                                       self._rng(4, index), gamma=config.transition_gamma,
+                                       self._rng(4, index), sampling=config.sampling, gamma=config.transition_gamma,
                                        values=config.alpha_values[index] if transition == "explicit" else None)
         else:
             p = probabilities(config.class_probs, index, config.num_tasks, self.problem.output_ids)
+            if config.progression == "classes" and p is not None:
+                available = torch.isin(torch.tensor(self.problem.output_ids), self.mapped_labels[source_index][pool])
+                p = p * available
+                mass = p.sum()
+                if mass <= 0:
+                    raise ValueError("class_probs must assign positive probability to an available class")
+                p = p / mass
             indices = sample_indices(pool, self.mapped_labels[source_index], count, config.sampling, p, self.problem.output_ids, self._rng(4, index))
         data = IncrementalData(source, indices, self.label_maps[source_index], augment=True)
         consume = Consumption(chunk, scheduled(config.epochs, index, config.num_tasks, "epochs"),

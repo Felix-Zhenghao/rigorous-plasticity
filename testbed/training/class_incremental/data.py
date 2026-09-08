@@ -74,16 +74,37 @@ def mixture_alpha(
 
 def mixture_arrivals(
     old: torch.Tensor, expanded: torch.Tensor, count: int, chunk_size: int, transition: str,
-    duration: int, generator: torch.Generator, *, gamma: float = 0.5,
+    duration: int, generator: torch.Generator, *, sampling: str = "with_replacement", gamma: float = 0.5,
     values: Sequence[float] | None = None,
 ) -> torch.Tensor:
+    """Sample nested-pool mixtures, depleting both pools together without replacement."""
+    replacement = sampling == "with_replacement"
+    if not replacement:
+        if count > len(expanded):
+            raise ValueError("task_samples exceeds the expanded pool without replacement")
+        added = expanded[~torch.isin(expanded, old)]
+        remaining_old = old[torch.randperm(len(old), generator=generator)].tolist()
+        remaining_added = added[torch.randperm(len(added), generator=generator)].tolist()
+
     indices = torch.empty(count, dtype=torch.long)
     for start in range(0, count, chunk_size):
         end = min(start + chunk_size, count)
         alpha = mixture_alpha(transition, start // chunk_size + 1, duration, gamma=gamma, values=values)
-        component = torch.rand(end - start, generator=generator) < alpha
-        n_new, n_old = int(component.sum()), int((~component).sum())
+        draws = torch.rand(end - start, generator=generator)
         arrivals = indices[start:end]
+        if not replacement:
+            selected = []
+            for draw in draws.tolist():
+                n_old = len(remaining_old)
+                total = n_old + len(remaining_added)
+                # The expanded component also contains every remaining old example.
+                p_old = 1 - alpha + alpha * n_old / total if n_old else 0.0
+                pool = remaining_old if draw < p_old else remaining_added
+                selected.append(pool.pop())
+            arrivals[:] = torch.tensor(selected, dtype=torch.long)
+            continue
+        component = draws < alpha
+        n_new, n_old = int(component.sum()), int((~component).sum())
         arrivals[component] = expanded[torch.randint(len(expanded), (n_new,), generator=generator)]
         arrivals[~component] = old[torch.randint(len(old), (n_old,), generator=generator)]
     return indices

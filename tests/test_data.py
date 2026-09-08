@@ -159,6 +159,41 @@ def test_class_incremental_explicit_subset_defines_the_final_output_space() -> N
     assert set(y for _, y, _ in rows(p.get_data().data)) == {1, 3}
 
 
+@pytest.mark.parametrize("sampling", ["without_replacement", "with_replacement"])
+@pytest.mark.parametrize("scheduled_probs", [False, True])
+def test_class_incremental_renormalizes_probabilities_per_stage(sampling: str, scheduled_probs: bool) -> None:
+    first_probs = [0.1, 0.2, 0.3, 0.4]
+    final_probs = [0.4, 0, 0.2, 0.4] if scheduled_probs else first_probs
+    class_probs = [first_probs, final_probs] if scheduled_probs else first_probs
+    original = torch.tensor(class_probs)
+    counts = [8, 10] if sampling == "without_replacement" else [8000, 10000]
+    p = paradigm("class_incremental", data=bundle(labels=(2, 5, 9, 12)), class_order=[9, 2, 12, 5],
+                 task_samples=counts, sampling=sampling, class_probs=class_probs)
+    assert p.problem.output_ids == (2, 5, 9, 12)
+    expected = [{2: 0.25, 5: 0, 9: 0.75, 12: 0}, dict(zip(p.problem.output_ids, final_probs))]
+    for count, proportions in zip(counts, expected):
+        data = p.get_data().data
+        assert len(data) == count
+        tolerance = 0 if sampling == "without_replacement" else 0.02
+        assert p.metadata["tasks"][-1]["realized_class_proportions"] == pytest.approx(proportions, abs=tolerance)
+        if sampling == "without_replacement":
+            assert len(data.ids.unique()) == count
+    assert torch.equal(torch.tensor(p.config.class_probs), original)
+
+
+def test_class_incremental_probabilities_exclude_classes_missing_from_the_pool() -> None:
+    p = paradigm("class_incremental", stage_sizes=[4], pool_size=1, class_probs=[0.1, 0.2, 0.3, 0.4])
+    assert p.problem.output_ids == (0, 1, 2, 3)
+    assert torch.equal(p.get_data().data.indices, p.stage_pools[0])
+
+
+@pytest.mark.parametrize("sampling", ["without_replacement", "with_replacement"])
+def test_class_incremental_probabilities_require_mass_on_available_classes(sampling: str) -> None:
+    p = paradigm("class_incremental", class_order=[3, 1, 2, 0], class_probs=[1, 0, 0, 0], sampling=sampling)
+    with pytest.raises(ValueError, match="positive probability.*available class"):
+        p.get_data()
+
+
 @pytest.mark.parametrize("order", ["iid", "class_ordered"])
 def test_example_expansion_constructs_nested_pools(order: str) -> None:
     p = paradigm("class_incremental", progression="examples", stage_sizes=[0.5, 1.0], arrival_order=order,
@@ -201,6 +236,94 @@ def test_mixture_probabilities_endpoints_and_zero_update_initial_stage() -> None
     assert p.get_data() is None
 
 
+@pytest.mark.parametrize("progression", ["classes", "examples"])
+@pytest.mark.parametrize("transition", ["linear", "exponential", "explicit"])
+@pytest.mark.parametrize("task_samples", [31, "pool"])
+def test_smooth_stages_sample_without_replacement(progression: str, transition: str, task_samples: int | str) -> None:
+    options = dict(transition_gamma=0.9) if transition == "exponential" else {}
+    if transition == "explicit":
+        options["alpha_values"] = [None, [1, 0, 0.25, 0]]
+    p = paradigm("class_incremental", progression=progression, class_order=[3, 1, 2, 0],
+                 stage_sizes=[1, 4] if progression == "classes" else [0.25, 1.0],
+                 task_samples=["pool", task_samples], chunk_size=["task", 9],
+                 transition=["abrupt", transition], transition_chunks=[1, 4], **options)
+    old, expanded = [pool.clone() for pool in p.stage_pools]
+    initial, data = p.get_data().data, p.get_data().data
+    count = len(expanded) if task_samples == "pool" else task_samples
+    assert len(data) == len(data.indices.unique()) == count
+    assert set(data.indices.tolist()) <= set(expanded.tolist())
+    assert set(initial.ids.tolist()) & set(data.ids.tolist())
+    assert torch.equal(p.stage_pools[0], old) and torch.equal(p.stage_pools[1], expanded)
+    if transition == "linear":
+        assert set(data.indices[:9].tolist()) <= set(old.tolist())
+    if task_samples == "pool":
+        assert set(data.indices.tolist()) == set(expanded.tolist())
+
+
+@pytest.mark.parametrize("chunk_size", [1, 4, 11])
+def test_smooth_sampling_falls_back_when_the_old_pool_is_exhausted(chunk_size: int) -> None:
+    old = torch.tensor([11, 2, 7])
+    expanded = torch.tensor([19, 2, 37, 7, 11, 43, 53, 61, 67, 71, 83])
+    duration = (len(expanded) + chunk_size - 1) // chunk_size
+    draws = mixture_arrivals(old, expanded, len(expanded), chunk_size, "explicit", duration,
+                             torch.Generator().manual_seed(4), sampling="without_replacement", values=[0] * duration)
+    assert set(draws[:len(old)].tolist()) == set(old.tolist())
+    assert set(draws[len(old):].tolist()) == set(expanded.tolist()) - set(old.tolist())
+    assert len(draws.unique()) == len(expanded)
+
+
+@pytest.mark.parametrize("alpha,first_old,both_old", [(0.5, 0.75, 0.5), (1.0, 0.5, 1 / 6)])
+def test_smooth_sampling_uses_the_remaining_pool_mixture(alpha: float, first_old: float, both_old: float) -> None:
+    old, expanded = torch.tensor([10, 30]), torch.tensor([10, 20, 30, 40])
+    generator = torch.Generator().manual_seed(4)
+    draws = torch.stack([
+        mixture_arrivals(old, expanded, 2, 2, "explicit", 1, generator,
+                         sampling="without_replacement", values=[alpha])
+        for _ in range(6000)
+    ])
+    membership = torch.isin(draws, old)
+    assert (draws[:, 0] != draws[:, 1]).all()
+    assert float(membership[:, 0].float().mean()) == pytest.approx(first_old, abs=0.02)
+    assert float(membership.all(dim=1).float().mean()) == pytest.approx(both_old, abs=0.02)
+
+
+def test_smooth_sampling_without_replacement_rejects_excess_arrivals() -> None:
+    p = paradigm("class_incremental", progression="examples", stage_sizes=[0.5, 1.0],
+                 task_samples=["pool", 41], chunk_size=4, transition="linear", transition_chunks=3)
+    p.get_data()
+    with pytest.raises(ValueError, match="task_samples exceeds the expanded pool without replacement"):
+        p.get_data()
+
+
+def test_smooth_sampling_without_replacement_preserves_reuse_and_resume() -> None:
+    options = dict(progression="examples", stage_sizes=[0.1, 1.0], task_samples=["pool", 23],
+                   chunk_size=["task", 6], epochs=[None, 2], updates=[0, None], shuffle_each_epoch=False,
+                   transition=["abrupt", "linear"], transition_chunks=[1, 4])
+
+    def trace(consumer: Consumer) -> list[torch.Tensor]:
+        result = []
+        for batch in consumer:
+            result.append(batch[2])
+            consumer.commit()
+        return result
+
+    full = Consumer(paradigm("class_incremental", **options), 2)
+    expected = trace(full)
+    ids, counts = torch.cat(expected).unique(return_counts=True)
+    assert len(ids) == 23 and (counts == 2).all()
+    assert all(torch.equal(a, b) for a, b in zip(expected[:3], expected[3:6]))
+    interrupted = Consumer(paradigm("class_incremental", **options), 2)
+    for _ in range(4):
+        next(interrupted)
+        interrupted.commit()
+    resumed = Consumer(paradigm("class_incremental", **options), 2)
+    resumed.load_state_dict(interrupted.state_dict())
+    actual = trace(resumed)
+    assert len(actual) == len(expected[4:])
+    assert all(torch.equal(a, b) for a, b in zip(actual, expected[4:]))
+    assert resumed.counters == full.counters
+
+
 @pytest.mark.parametrize("name", ["class_remap", "pixel_permutation", "class_incremental"])
 def test_data_state_restores_arrivals_targets_and_current_eval(name: str) -> None:
     p = paradigm(name, sampling="with_replacement", task_samples=13)
@@ -238,10 +361,11 @@ def test_s05_offsets_share_exact_inputs_centered_residuals_and_ids() -> None:
 
 
 def test_scientifically_invalid_incremental_modes_fail() -> None:
-    with pytest.raises(ValueError, match="replacement"):
-        paradigm("class_incremental", transition="linear", transition_chunks=2)
-    with pytest.raises(ValueError, match="fewer arrival chunks"):
-        paradigm("class_incremental", transition="linear", transition_chunks=2, sampling="with_replacement")
+    with pytest.raises(ValueError, match="class_probs=null"):
+        paradigm("class_incremental", transition="linear", transition_chunks=2, class_probs=[0.25] * 4)
+    for sampling in ("without_replacement", "with_replacement"):
+        with pytest.raises(ValueError, match="fewer arrival chunks"):
+            paradigm("class_incremental", transition="linear", transition_chunks=2, sampling=sampling)
     with pytest.raises(ValueError, match="strictly increasing"):
         paradigm("class_incremental", stage_sizes=[4, 2])
     with pytest.raises(ValueError, match="updates must be positive"):

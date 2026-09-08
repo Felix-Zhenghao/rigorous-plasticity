@@ -83,4 +83,8 @@ Implementation: [configuration](rigorous-plasticity/testbed/training/pixel_permu
 
 Class incremental training uses real datasets for both source and transfer target. `progression="classes"` expands the available class set, `"examples"` expands a nested example pool, and `"transfer"` switches to target-only data. The complete configured output space exists from initialization.
 
-For example expansion, `arrival_order="iid"` takes prefixes of a random pool order; `"class_ordered"` groups the pool by `class_order` before taking prefixes. These are the two supported arrival orders. Smooth transitions can mix the old pool with the expanded pool using `linear`, `exponential`, or `explicit` coefficients, with replacement sampling. Each sampled arrival stays fixed during repeated fitting.
+For class expansion, `class_probs` is masked to classes present in the current eligible pool and renormalized for each stage. Supply one vector in sorted final output-ID order or one row per stage. At least one available class must have positive probability; without-replacement class quotas must fit the pool.
+
+For example expansion, `arrival_order="iid"` takes prefixes of a random pool order; `"class_ordered"` groups the pool by `class_order` before taking prefixes. These are the two supported arrival orders.
+
+Smooth transitions mix the old pool with the expanded pool using `linear`, `exponential`, or `explicit` coefficients and require `class_probs=None`. Both replacement policies are supported. Without replacement, `task_samples` must not exceed the expanded pool size, and every draw removes the selected example from both pools for the rest of the stage. Once the old pool is exhausted, sampling uses only the remaining expanded pool regardless of the coefficient. Each sampled arrival stays fixed during repeated fitting.
