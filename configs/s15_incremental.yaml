@@ -1,3 +1,4 @@
+# Field meanings and allowed values: docs/configuration.md.
 # Cumulative example availability; each stage size is a total, with no removal of old examples.
 paradigm: class_incremental
 data:

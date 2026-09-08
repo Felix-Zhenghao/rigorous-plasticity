@@ -1,11 +1,15 @@
+from __future__ import annotations
+
 from copy import deepcopy
+from typing import Any
 
 import pytest
 import torch
 from torch import nn
 
 from testbed.core.factory import METHOD_ARCHITECTURES, make_model, make_network
-from testbed.core.types import ProblemSpec
+from testbed.core.types import Batch, ProblemSpec
+from testbed.methods.backprop.learner import BackpropLearner
 from testbed.models.initialization import sample_initial
 from testbed.models.layers import LayerNorm
 
@@ -21,20 +25,28 @@ ARCHITECTURES = {
 }
 
 
-def learner(method="backprop", architecture="mlp", *, model=None, method_config=None, loss="cross_entropy", **kwargs):
+def learner(
+    method: str = "backprop",
+    architecture: str = "mlp",
+    *,
+    model: dict[str, Any] | None = None,
+    method_config: dict[str, Any] | None = None,
+    loss: str = "cross_entropy",
+    **kwargs: Any,
+) -> BackpropLearner:
     return make_model(method, architecture, problem=ProblemSpec((1, 8, 8), loss, (2, 7, 11)),
                       model_config=ARCHITECTURES[architecture] | (model or {}),
                       method_config=METHODS[method] | (method_config or {}),
                       optimizer_config={"name": "adam", "lr": 0.001}, **kwargs)
 
 
-def batch():
+def batch() -> Batch:
     generator = torch.Generator().manual_seed(9)
     return torch.randn(2, 1, 8, 8, generator=generator), torch.tensor([2, 11]), torch.tensor([3, 8])
 
 
 @pytest.mark.parametrize("method,architecture", [(m, a) for m in METHODS for a in METHOD_ARCHITECTURES[m]])
-def test_supported_pairs_train_and_resume(method, architecture):
+def test_supported_pairs_train_and_resume(method: str, architecture: str) -> None:
     current = learner(method, architecture, seed=3, method_seed=17)
     data = batch()
     result = current.train_step(data)
@@ -52,7 +64,7 @@ def test_supported_pairs_train_and_resume(method, architecture):
         torch.testing.assert_close(value, restored.network.state_dict()[name], rtol=0, atol=0)
 
 
-def test_l2_half_factor_and_parameter_roles():
+def test_l2_half_factor_and_parameter_roles() -> None:
     current = learner("l2", model={"norm": "layer"}, method_config={"coefficient": 0.4})
     assert "hidden.0.linear.bias" in current.selected
     assert "hidden.0.norm.weight" not in current.selected
@@ -63,7 +75,7 @@ def test_l2_half_factor_and_parameter_roles():
         torch.testing.assert_close(parameter.grad, 0.4 * parameter)
 
 
-def test_l2_init_keeps_distinct_frozen_anchors():
+def test_l2_init_keeps_distinct_frozen_anchors() -> None:
     current = learner("l2_init", method_config={"coefficient": 0.3})
     assert current.penalty().item() == 0
     anchors = deepcopy(current.anchors)
@@ -77,7 +89,7 @@ def test_l2_init_keeps_distinct_frozen_anchors():
         assert not current.anchors[name].requires_grad
 
 
-def test_feature_penalty_reductions_and_readout_independence():
+def test_feature_penalty_reductions_and_readout_independence() -> None:
     current = learner("feature_norm", method_config={"coefficient": 0.7})
     predictions, features = current.forward_features(current.network, batch()[0], ("head_input",))
     penalty = current.penalty(features)
@@ -89,7 +101,7 @@ def test_feature_penalty_reductions_and_readout_independence():
     torch.testing.assert_close(summed.penalty(features), penalty * features["head_input"].shape[1])
 
 
-def test_infer_auxiliary_parameters_train_and_references_freeze():
+def test_infer_auxiliary_parameters_train_and_references_freeze() -> None:
     current = learner("infer", model={"head_hidden_sizes": [5]}, seed=4)
     initial = deepcopy(current.frozen_network.state_dict())
     initial_heads = deepcopy(current.frozen_auxiliary.state_dict())
@@ -109,7 +121,7 @@ def test_infer_auxiliary_parameters_train_and_references_freeze():
 
 
 @pytest.mark.parametrize("architecture", ["mlp", "resnet_18"])
-def test_feature_site_tracks_hidden_readout_and_matches_network(architecture):
+def test_feature_site_tracks_hidden_readout_and_matches_network(architecture: str) -> None:
     current = learner("feature_norm", architecture, model={"head_hidden_sizes": [5, 4]})
     current.network.eval()
     predictions, features = current.forward_features(current.network, batch()[0], ("head_input", "head_hidden.1"))
@@ -118,14 +130,14 @@ def test_feature_site_tracks_hidden_readout_and_matches_network(architecture):
     torch.testing.assert_close(predictions, current.network(batch()[0]), rtol=0, atol=0)
 
 
-def test_leaky_relu_respects_explicit_model_slope_and_rejects_conflicts():
+def test_leaky_relu_respects_explicit_model_slope_and_rejects_conflicts() -> None:
     current = learner("leaky_relu", model={"negative_slope": 0.2})
     assert current.network.hidden[0].activation.negative_slope == 0.2
     with pytest.raises(ValueError, match="disagree"):
         learner("leaky_relu", model={"negative_slope": 0.2}, method_config={"negative_slope": 0.3})
 
 
-def test_spectral_gradient_matches_exact_svd_and_includes_bias():
+def test_spectral_gradient_matches_exact_svd_and_includes_bias() -> None:
     problem = ProblemSpec((2,), "mse", (0, 1))
     current = make_model("spectral", "mlp", problem=problem, model_config={"hidden_sizes": []},
                          method_config={"coefficient": 0.2, "power_iterations": 50},
@@ -144,7 +156,7 @@ def test_spectral_gradient_matches_exact_svd_and_includes_bias():
     torch.testing.assert_close(current.network.head.bias.grad, bias.grad)
 
 
-def test_spectral_effective_residual_gains_and_embeddings():
+def test_spectral_effective_residual_gains_and_embeddings() -> None:
     current = learner("spectral", "vit", model={"ln_gain": "residual"})
     assert "pos_embedding" in current.matrices
     assert "cls_token" in current.vectors
@@ -155,7 +167,7 @@ def test_spectral_effective_residual_gains_and_embeddings():
 
 
 @pytest.mark.parametrize("axes", ["channels", "all_features"])
-def test_resnet_layer_norm_replaces_all_batch_norm(axes):
+def test_resnet_layer_norm_replaces_all_batch_norm(axes: str) -> None:
     current = learner("layer_norm", "resnet_18", model={"ln_axes": axes})
     assert not any(isinstance(module, nn.modules.batchnorm._BatchNorm) for module in current.network.modules())
     assert sum(isinstance(module, LayerNorm) for module in current.network.modules()) == 20
@@ -166,7 +178,7 @@ def test_resnet_layer_norm_replaces_all_batch_norm(axes):
     torch.testing.assert_close(current.predict(batch()[0]), inference(batch()[0]))
 
 
-def test_leaky_relu_covers_stem_and_both_block_activations():
+def test_leaky_relu_covers_stem_and_both_block_activations() -> None:
     current = learner("leaky_relu", "resnet_18", method_config={"negative_slope": 0.2})
     activations = [module for module in current.network.modules() if isinstance(module, nn.LeakyReLU)]
     assert len(activations) == 17
@@ -174,7 +186,7 @@ def test_leaky_relu_covers_stem_and_both_block_activations():
     assert not any(isinstance(module, nn.ReLU) for module in current.network.modules())
 
 
-def test_predict_restores_modes_buffers_and_dropout_rng():
+def test_predict_restores_modes_buffers_and_dropout_rng() -> None:
     current = learner(model={"dropout": 0.5}, seed=8)
     current.network.hidden[0].dropout.eval()
     modes = [module.training for module in current.network.modules()]
@@ -190,7 +202,7 @@ def test_predict_restores_modes_buffers_and_dropout_rng():
         torch.testing.assert_close(value, restored.network.state_dict()[name], rtol=0, atol=0)
 
 
-def test_sliced_initialization_retains_original_fan():
+def test_sliced_initialization_retains_original_fan() -> None:
     current = learner()
     name = "hidden.0.linear.weight"
     rule = current.network.initialization_rules[name]
@@ -204,12 +216,12 @@ def test_sliced_initialization_retains_original_fan():
     ("mlp", {"norm": "none", "norm_position": "post_activation"}),
     ("resnet_18", {"norm": "batch", "ln_axes": "all_features"}),
     ("vit", {"embed_dim": 10, "num_heads": 3}), ("vit", {"head_dim": 3})])
-def test_invalid_or_ignored_architecture_fields_fail(architecture, model):
+def test_invalid_or_ignored_architecture_fields_fail(architecture: str, model: dict[str, Any]) -> None:
     with pytest.raises(ValueError):
         learner(architecture=architecture, model=model)
 
 
-def test_ordinary_learner_fits_stationary_regression():
+def test_ordinary_learner_fits_stationary_regression() -> None:
     problem = ProblemSpec((2,), "mse", (0,))
     current = make_model("backprop", "mlp", problem=problem, model_config={"hidden_sizes": []},
                          optimizer_config={"name": "sgd", "lr": 0.1})

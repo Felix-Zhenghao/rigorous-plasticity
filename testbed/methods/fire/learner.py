@@ -1,18 +1,24 @@
+from __future__ import annotations
+
 import time
+from collections.abc import Mapping
 from copy import deepcopy
 from math import sqrt
+from typing import Any
 
 import torch
-from torch import nn
+from torch import Tensor, nn
 
 from testbed.core.losses import supervised_loss
 from testbed.core.optim import set_learning_rate
-from testbed.core.types import StepResult
+from testbed.core.types import Batch, StepResult
 from testbed.methods.backprop.learner import BackpropLearner
+
+from .config import FIREConfig
 
 
 @torch.no_grad()
-def newton_schulz(matrix, iterations=10, eps=1e-12):
+def newton_schulz(matrix: Tensor, iterations: int = 10, eps: float = 1e-12) -> tuple[Tensor, int]:
     """Author FIRE iteration, with FP32 arithmetic and a zero-norm guard."""
     x = matrix.float()
     norm = x.norm()
@@ -27,13 +33,15 @@ def newton_schulz(matrix, iterations=10, eps=1e-12):
 
 
 class FIRELearner(BackpropLearner):
-    def __init__(self, *, config, selected_weights, **kwargs):
+    def __init__(
+        self, *, config: FIREConfig, selected_weights: Mapping[str, nn.Parameter], **kwargs: Any
+    ) -> None:
         super().__init__(**kwargs)
         self.config, self.selected_weights = config, selected_weights
         self.selected_parameters = list(self.selected_weights)
 
     @torch.no_grad()
-    def intervene(self):
+    def intervene(self) -> int:
         skipped = 0
         for parameter in self.selected_weights.values():
             scale = sqrt(parameter.shape[0] / parameter.shape[1])
@@ -54,7 +62,7 @@ class FIRELearner(BackpropLearner):
             self.optimizer.state.clear()
         return skipped
 
-    def train_step(self, batch):
+    def train_step(self, batch: Batch) -> StepResult:
         with self.rng:
             x, targets, _ = batch
             device = next(self.network.parameters()).device
@@ -75,12 +83,12 @@ class FIRELearner(BackpropLearner):
             return StepResult(predictions.detach(), loss.detach(), metrics={"intervention": float(due),
                               "projection_skipped": float(skipped), "maintenance_seconds": time.perf_counter() - started})
 
-    def state_dict(self):
+    def state_dict(self) -> dict[str, Any]:
         state = super().state_dict()
         state["fire"] = {"selected_names": list(self.selected_weights)}
         return deepcopy(state)
 
-    def load_state_dict(self, state):
+    def load_state_dict(self, state: Mapping[str, Any]) -> None:
         if state["fire"]["selected_names"] != list(self.selected_weights):
             raise ValueError("FIRE parameter scope differs from checkpoint")
         super().load_state_dict(state)

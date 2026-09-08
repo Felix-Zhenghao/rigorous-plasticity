@@ -1,3 +1,4 @@
+# Field meanings and allowed values: docs/configuration.md.
 # S12 with a fixed full head. ViT capacity follows P13; FIRE follows P16's Q/K-only scope.
 # The 1000-update cadence and keeping optimizer moments are explicit testbed choices.
 paradigm: class_incremental

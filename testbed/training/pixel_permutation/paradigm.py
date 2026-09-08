@@ -1,9 +1,13 @@
+from __future__ import annotations
+
 import math
+from pathlib import Path
+from typing import Any
 
 import torch
 
 from testbed.core.types import Consumption, DataBlock, ProblemSpec
-from testbed.data.datasets import load_dataset, prepare_data
+from testbed.data.datasets import DatasetInput, PreparedSplit, load_dataset, prepare_data
 from testbed.data.sampling import probabilities, realized_proportions, sample_indices, scheduled
 
 from .config import PixelPermutationConfig
@@ -11,7 +15,10 @@ from .data import PermutedData
 
 
 class PixelPermutation:
-    def __init__(self, config, *, data_root="data", seed=0, datasets=None):
+    def __init__(
+        self, config: PixelPermutationConfig | dict[str, Any], *, data_root: str | Path = "data",
+        seed: int = 0, datasets: DatasetInput = None,
+    ) -> None:
         self.config = config if isinstance(config, PixelPermutationConfig) else PixelPermutationConfig(**config)
         config, self.seed = self.config, seed
         bundle = datasets.get(config.dataset) if isinstance(datasets, dict) else datasets
@@ -28,14 +35,14 @@ class PixelPermutation:
         for i in range(config.num_tasks):
             probabilities(config.class_probs, i, config.num_tasks, self.problem.output_ids)
 
-    def _rng(self, purpose, index=0):
+    def _rng(self, purpose: int, index: int = 0) -> torch.Generator:
         return torch.Generator().manual_seed((self.seed + purpose * 1000003 + index * 9176) % (2**63 - 1))
 
-    def _select_pool(self, index):
+    def _select_pool(self, index: int) -> torch.Tensor:
         size = len(self.splits["train"])
         return torch.randperm(size, generator=self._rng(1, index))[:min(self.config.pool_size or size, size)]
 
-    def _permutation(self, index):
+    def _permutation(self, index: int) -> torch.Tensor:
         shape = self.problem.input_shape
         count = math.prod(shape[1:] if self.config.permutation_axes == "spatial" else shape)
         permutation = torch.arange(count)
@@ -47,7 +54,7 @@ class PixelPermutation:
         permutation[eligible] = eligible[torch.randperm(len(eligible), generator=rng)]
         return permutation
 
-    def get_data(self):
+    def get_data(self) -> DataBlock | None:
         config, index = self.config, self.next_task
         if index >= config.num_tasks:
             return None
@@ -68,21 +75,21 @@ class PixelPermutation:
                                        "moved_fraction": float((permutation != torch.arange(len(permutation))).float().mean())})
         return DataBlock(data, consume)
 
-    def get_unseen_data(self, split):
+    def get_unseen_data(self, split: str) -> PreparedSplit:
         if split not in {"val", "test"}:
             raise ValueError("Held-out split must be val or test")
         return self.splits[split]
 
-    def get_eval_data(self, split):
+    def get_eval_data(self, split: str) -> PermutedData:
         source = self.get_unseen_data(split)
         return PermutedData(source, torch.arange(len(source)), self.permutations[self.active_task % len(self.permutations)], self.config.permutation_axes)
 
-    def state_dict(self):
+    def state_dict(self) -> dict[str, Any]:
         return {"seed": self.seed, "next_task": self.next_task, "active_task": self.active_task,
                 "pool": self.pool, "permutations": self.permutations,
                 "metadata": {**self.metadata, "tasks": list(self.metadata["tasks"])}}
 
-    def load_state_dict(self, state):
+    def load_state_dict(self, state: dict[str, Any]) -> None:
         if state.get("seed", self.seed) != self.seed:
             raise ValueError("The data seed differs from the saved run")
         if not 0 <= state["next_task"] <= self.config.num_tasks:

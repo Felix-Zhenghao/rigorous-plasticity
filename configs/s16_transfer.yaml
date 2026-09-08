@@ -1,3 +1,4 @@
+# Field meanings and allowed values: docs/configuration.md.
 # CIFAR-10 -> SVHN target-only transfer. Native IDs deliberately share ten output units.
 paradigm: class_incremental
 data:

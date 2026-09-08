@@ -1,3 +1,4 @@
+# Field meanings and allowed values: docs/configuration.md.
 kind: checkpoint_probes
 probe_config: configs/s03_teacher.yaml
 checkpoints: [runs/pixel_online/checkpoints/update_*.pt]

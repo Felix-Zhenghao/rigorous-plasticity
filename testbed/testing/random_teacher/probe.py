@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 from pathlib import Path
+from typing import Any
 
 import torch
 
@@ -6,12 +9,17 @@ from testbed.core.config import strict_dataclass
 from testbed.core.metrics import write_json
 from testbed.core.random import derive_seed, isolated_rng
 from testbed.core.types import ProblemSpec
+from testbed.data.datasets import DatasetInput
 from testbed.testing.common import ProbeResult, fit_pair, seen_inputs, source_state, unseen_inputs
 
 from .config import TeacherProbeConfig
 
 
-def run(config, checkpoint, output_dir, *, device="cpu", seed=0, data_root=None, datasets=None):
+def run(
+    config: TeacherProbeConfig | dict[str, Any], checkpoint: str | Path | dict[str, Any],
+    output_dir: str | Path, *, device: str | torch.device = "cpu", seed: int = 0,
+    data_root: str | Path | None = None, datasets: DatasetInput = None,
+) -> ProbeResult:
     from testbed.core.factory import make_network
     config = strict_dataclass(TeacherProbeConfig, config) if isinstance(config, dict) else config
     checkpoint = source_state(checkpoint)

@@ -1,9 +1,19 @@
-from torch import nn
+from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+from torch import Tensor, nn
+
+from .config import ResNet18Config
 from .layers import HiddenLayer, activation, layer_norm
 
+if TYPE_CHECKING:
+    from testbed.core.types import ProblemSpec
 
-def normalization(channels, spatial, config):
+    from .initialization import InitializationRule
+
+
+def normalization(channels: int, spatial: tuple[int, int], config: ResNet18Config) -> nn.Module:
     if config.norm == "batch":
         return nn.BatchNorm2d(channels)
     if config.ln_axes == "channels":
@@ -12,7 +22,14 @@ def normalization(channels, spatial, config):
 
 
 class BasicBlock(nn.Module):
-    def __init__(self, in_channels, channels, stride, spatial, config):
+    def __init__(
+        self,
+        in_channels: int,
+        channels: int,
+        stride: int,
+        spatial: tuple[int, int],
+        config: ResNet18Config,
+    ) -> None:
         super().__init__()
         self.conv1 = nn.Conv2d(in_channels, channels, 3, stride=stride, padding=1, bias=config.bias)
         self.norm1 = normalization(channels, spatial, config)
@@ -25,7 +42,7 @@ class BasicBlock(nn.Module):
         self.sum_norm = normalization(channels, spatial, config) if config.normalize_residual_sum else nn.Identity()
         self.activation2 = activation(config.activation, config.negative_slope)
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         residual = self.shortcut(x)
         x = self.activation1(self.norm1(self.conv1(x)))
         x = self.norm2(self.conv2(x))
@@ -33,7 +50,11 @@ class BasicBlock(nn.Module):
 
 
 class ResNet18(nn.Module):
-    def __init__(self, problem, config):
+    initialization_rules: dict[str, InitializationRule]
+    resolved_config: dict[str, object]
+    architecture: str
+
+    def __init__(self, problem: ProblemSpec, config: ResNet18Config) -> None:
         super().__init__()
         if len(problem.input_shape) != 3:
             raise ValueError("ResNet requires CHW inputs")
@@ -65,7 +86,7 @@ class ResNet18(nn.Module):
         self.head_input_dim = channels
         self.head = nn.Linear(channels, len(problem.output_ids), bias=config.head_bias)
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         x = self.stem_pool(self.stem_activation(self.stem_norm(self.stem_conv(x))))
         for stage in self.stages:
             x = stage(x)
@@ -75,5 +96,5 @@ class ResNet18(nn.Module):
         return self.head(x)
 
 
-def build(problem, config):
+def build(problem: ProblemSpec, config: ResNet18Config) -> ResNet18:
     return ResNet18(problem, config)

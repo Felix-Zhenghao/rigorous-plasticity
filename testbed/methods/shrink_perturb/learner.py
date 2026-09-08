@@ -1,17 +1,24 @@
+from __future__ import annotations
+
 import time
+from collections.abc import Mapping
 from copy import deepcopy
+from typing import Any
 
 import torch
 from torch import nn
 
 from testbed.core.losses import supervised_loss
 from testbed.core.optim import set_learning_rate
-from testbed.core.types import StepResult
+from testbed.core.types import Batch, StepResult
 from testbed.methods.backprop.learner import BackpropLearner
+from testbed.models import Network
 from testbed.models.initialization import sample_initial
 
+from .config import ShrinkPerturbConfig
 
-def select_parameters(network, config):
+
+def select_parameters(network: Network, config: ShrinkPerturbConfig) -> dict[str, nn.Parameter]:
     modules = dict(network.named_modules())
     scope = config.parameter_scope
     if isinstance(scope, str) and scope not in {"network", "hidden", "head"}:
@@ -40,7 +47,7 @@ def select_parameters(network, config):
 
 
 class ShrinkPerturbLearner(BackpropLearner):
-    def __init__(self, *, config, **kwargs):
+    def __init__(self, *, config: ShrinkPerturbConfig, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.config = config
         self.selected_weights = select_parameters(self.network, config)
@@ -53,7 +60,7 @@ class ShrinkPerturbLearner(BackpropLearner):
                                and any(name == s or name.startswith(s + ".") for s in scope))]
 
     @torch.no_grad()
-    def intervene(self):
+    def intervene(self) -> None:
         for name, parameter in self.selected_weights.items():
             parameter.mul_(self.config.retain)
             if self.config.noise_scale:
@@ -74,7 +81,7 @@ class ShrinkPerturbLearner(BackpropLearner):
             for module in self.running_norms:
                 module.reset_running_stats()
 
-    def train_step(self, batch):
+    def train_step(self, batch: Batch) -> StepResult:
         with self.rng:
             x, targets, _ = batch
             device = next(self.network.parameters()).device
@@ -97,17 +104,17 @@ class ShrinkPerturbLearner(BackpropLearner):
                               "maintenance_seconds": time.perf_counter() - started})
 
     @property
-    def cost_metrics(self):
+    def cost_metrics(self) -> dict[str, int]:
         metrics = super().cost_metrics
         metrics["frozen_state_bytes"] = sum(t.numel() * t.element_size() for t in self.anchors.values())
         return metrics
 
-    def state_dict(self):
+    def state_dict(self) -> dict[str, Any]:
         state = super().state_dict()
         state["shrink_perturb"] = {"anchors": self.anchors, "selected_names": list(self.selected_weights)}
         return deepcopy(state)
 
-    def load_state_dict(self, state):
+    def load_state_dict(self, state: Mapping[str, Any]) -> None:
         if state["shrink_perturb"]["selected_names"] != list(self.selected_weights):
             raise ValueError("S&P parameter scope differs from checkpoint")
         super().load_state_dict(state)

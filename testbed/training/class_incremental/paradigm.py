@@ -1,10 +1,14 @@
+from __future__ import annotations
+
 import math
 from copy import deepcopy
+from pathlib import Path
+from typing import Any
 
 import torch
 
 from testbed.core.types import Consumption, DataBlock, ProblemSpec
-from testbed.data.datasets import load_dataset, prepare_data
+from testbed.data.datasets import DatasetInput, load_dataset, prepare_data
 from testbed.data.sampling import probabilities, realized_proportions, sample_indices, scheduled
 
 from .config import ClassIncrementalConfig
@@ -12,7 +16,10 @@ from .data import IncrementalData, mixed_partitions, mixture_arrivals, resolve_s
 
 
 class ClassIncremental:
-    def __init__(self, config, *, data_root="data", seed=0, datasets=None):
+    def __init__(
+        self, config: ClassIncrementalConfig | dict[str, Any], *, data_root: str | Path = "data",
+        seed: int = 0, datasets: DatasetInput = None,
+    ) -> None:
         self.config = config if isinstance(config, ClassIncrementalConfig) else ClassIncrementalConfig(**config)
         config, self.seed = self.config, seed
         names = [config.dataset, config.target_dataset] if config.progression == "transfer" else [config.dataset]
@@ -55,11 +62,11 @@ class ClassIncremental:
             probabilities(config.class_probs, i, config.num_tasks, self.problem.output_ids)
             self._validate_transition(i)
 
-    def _rng(self, purpose, index=0):
+    def _rng(self, purpose: int, index: int = 0) -> torch.Generator:
         return torch.Generator().manual_seed((self.seed + purpose * 1000003 + index * 9176) % (2**63 - 1))
 
     @staticmethod
-    def _label_map(labels, mapping):
+    def _label_map(labels: tuple[int, ...], mapping: dict[int, int] | None) -> dict[int, int]:
         if mapping is None:
             return {label: label for label in labels}
         result = {int(key): int(value) for key, value in mapping.items()}
@@ -67,11 +74,11 @@ class ClassIncremental:
             raise ValueError("Transfer label maps must cover every native label exactly")
         return result
 
-    def _pool(self, source):
+    def _pool(self, source: int) -> torch.Tensor:
         size = len(self.sources[source]["train"])
         return torch.randperm(size, generator=self._rng(1, source))[:min(self.config.pool_size or size, size)]
 
-    def _class_order(self):
+    def _class_order(self) -> list[int]:
         labels = self.bundles[0].output_ids
         if isinstance(self.config.class_order, list):
             order = self.config.class_order
@@ -82,10 +89,10 @@ class ClassIncremental:
             return list(order)
         return [labels[i] for i in torch.randperm(len(labels), generator=self._rng(2)).tolist()]
 
-    def _source_index(self, stage):
+    def _source_index(self, stage: int) -> int:
         return stage if self.config.progression == "transfer" else 0
 
-    def _stages(self):
+    def _stages(self) -> tuple[list[torch.Tensor], list[set[int]]]:
         config, pool, labels = self.config, self.master_pools[0], self.sources[0]["train"].targets
         if config.progression == "transfer":
             pools = []
@@ -111,14 +118,14 @@ class ClassIncremental:
             pools = [pool[:size] for size in sizes]
         return pools, [set(self.bundles[0].output_ids) for _ in sizes]
 
-    def _budget(self, index):
+    def _budget(self, index: int) -> tuple[int, int]:
         config = self.config
         count = scheduled(config.task_samples, index, config.num_tasks, "task_samples")
         count = len(self.stage_pools[index]) if count == "pool" else count
         chunk = scheduled(config.chunk_size, index, config.num_tasks, "chunk_size")
         return count, count if chunk == "task" else chunk
 
-    def _validate_transition(self, index):
+    def _validate_transition(self, index: int) -> None:
         transition = scheduled(self.config.transition, index, self.config.num_tasks, "transition")
         if index == 0 or transition == "abrupt":
             return
@@ -127,7 +134,7 @@ class ClassIncremental:
         if math.ceil(count / chunk) < duration:
             raise ValueError("The stage has fewer arrival chunks than transition_chunks")
 
-    def get_data(self):
+    def get_data(self) -> DataBlock | None:
         config = self.config
         while self.next_task < config.num_tasks:
             index = self.next_task
@@ -156,7 +163,7 @@ class ClassIncremental:
         self.metadata["tasks"].append({"arrival_count": len(data), "realized_class_proportions": realized_proportions(labels, self.problem.output_ids)})
         return DataBlock(data, consume)
 
-    def get_unseen_data(self, split):
+    def get_unseen_data(self, split: str) -> IncrementalData:
         if split not in {"val", "test"}:
             raise ValueError("Held-out split must be val or test")
         source = self.sources[self._source_index(self.active_task)][split]
@@ -165,7 +172,7 @@ class ClassIncremental:
             indices = indices[torch.isin(source.targets, torch.tensor(sorted(self.stage_support[-1])))]
         return IncrementalData(source, indices, self.label_maps[self._source_index(self.active_task)])
 
-    def get_eval_data(self, split):
+    def get_eval_data(self, split: str) -> IncrementalData:
         if split not in {"val", "test"}:
             raise ValueError("Held-out split must be val or test")
         source_index = self._source_index(self.active_task)
@@ -175,12 +182,12 @@ class ClassIncremental:
             indices = indices[torch.isin(source.targets, torch.tensor(sorted(self.stage_support[self.active_task])))]
         return IncrementalData(source, indices, self.label_maps[source_index])
 
-    def state_dict(self):
+    def state_dict(self) -> dict[str, Any]:
         return {"seed": self.seed, "next_task": self.next_task, "active_task": self.active_task,
                 "stage_pools": self.stage_pools, "stage_support": self.stage_support,
                 "metadata": {**self.metadata, "tasks": list(self.metadata["tasks"])}}
 
-    def load_state_dict(self, state):
+    def load_state_dict(self, state: dict[str, Any]) -> None:
         if state.get("seed", self.seed) != self.seed:
             raise ValueError("The data seed differs from the saved run")
         if not 0 <= state["next_task"] <= self.config.num_tasks:
@@ -194,7 +201,7 @@ class ClassIncremental:
                     raise ValueError("Dataset split membership differs from the saved run")
 
 
-def retarget_state(saved_state, new_paradigm):
+def retarget_state(saved_state: dict[str, Any], new_paradigm: ClassIncremental) -> dict[str, Any]:
     """Change an S16 target subset while preserving the source data state.
 
     The suite checks that source consumption has finished; accepting both the

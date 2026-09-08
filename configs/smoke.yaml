@@ -1,14 +1,15 @@
+# Field meanings and allowed values: docs/configuration.md.
 # A small, learnable, offline end-to-end check.
 paradigm: pixel_permutation
 data:
   dataset: synthetic
-  data_options: {n_train: 64, n_test: 16, num_classes: 4, input_shape: [1, 4, 4]}
-  validation_fraction: 0.25
-  num_tasks: 2
-  task_samples: 16
-  chunk_size: 8
-  epochs: 2
-  first_permutation: identity
+  data_options: {n_train: 64, n_test: 16, num_classes: 4, input_shape: [1, 4, 4]}  # Shape is [C, H, W].
+  validation_fraction: 0.25  # Hold out this fraction of each training class for validation.
+  num_tasks: 2  # Two pixel-permutation tasks; the optimizer continues across both.
+  task_samples: 16  # Arriving examples per task, before repeated fitting passes.
+  chunk_size: 8  # Expose eight arrivals together; fit them before exposing the next chunk.
+  epochs: 2  # Two passes per chunk; with batch_size=4, this gives four updates per chunk.
+  first_permutation: identity  # Keep original pixel order in task 0; later tasks use permutations.
 model: {name: mlp, hidden_sizes: [16, 16], activation: relu}
 method: {name: backprop}
 optimizer: {name: adam, lr: 0.01}
@@ -16,7 +17,7 @@ trainer:
   batch_size: 4
   eval_every_updates: 4
   checkpoint_every_updates: 4
-  seen_input_capacity: 32
+  seen_input_capacity: 32  # Cache at most 32 distinct observed inputs for later "seen" probes.
 seed: 0
 device: cpu
 data_root: ./data

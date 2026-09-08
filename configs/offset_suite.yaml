@@ -1,3 +1,4 @@
+# Field meanings and allowed values: docs/configuration.md.
 kind: experiments
 recipes: [configs/s05_pretrain.yaml]
 grid:

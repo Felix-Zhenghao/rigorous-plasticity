@@ -1,25 +1,38 @@
-from torch import nn
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+from typing import Any
+
+from torch import Tensor, nn
 
 from testbed.core.losses import supervised_loss
 from testbed.core.optim import set_learning_rate
-from testbed.core.types import StepResult
+from testbed.core.types import Batch, StepResult
 from testbed.methods.backprop.learner import BackpropLearner
+
+from .config import FeatureNormConfig
 
 
 class FeatureNormLearner(BackpropLearner):
-    def __init__(self, *, config, forward_features, **kwargs):
+    def __init__(
+        self,
+        *,
+        config: FeatureNormConfig,
+        forward_features: Callable[..., tuple[Tensor, dict[str, Tensor]]],
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
         self.config, self.forward_features = config, forward_features
         self.selected_sites = list(config.feature_sites)
 
-    def penalty(self, features):
+    def penalty(self, features: Mapping[str, Tensor]) -> Tensor:
         if self.config.reduction == "mean":
             values = [h.square().mean() for h in features.values()]
         else:
             values = [h.square().flatten(1).sum(dim=1).mean() for h in features.values()]
         return self.config.coefficient * sum(values)
 
-    def train_step(self, batch):
+    def train_step(self, batch: Batch) -> StepResult:
         x, targets, _ = batch
         with self.rng:
             lr = set_learning_rate(self.optimizer, self.optimizer_config, self.lr_schedule, self.completed_updates)
@@ -35,5 +48,5 @@ class FeatureNormLearner(BackpropLearner):
             self.completed_updates += 1
         return StepResult(predictions.detach(), loss.detach(), extra.detach(), {"lr": lr})
 
-    def state_dict(self):
+    def state_dict(self) -> dict[str, Any]:
         return super().state_dict() | {"selected_sites": self.selected_sites}

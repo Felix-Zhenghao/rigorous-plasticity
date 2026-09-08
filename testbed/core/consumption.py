@@ -1,22 +1,43 @@
 """A lazy chunk sampler with a durable, acknowledged minibatch cursor."""
+from __future__ import annotations
+
+from collections.abc import Iterator
 from copy import deepcopy
 from dataclasses import dataclass
+from typing import Any, TypeVar
 
 import torch
 from torch.utils.data import DataLoader, Dataset, default_collate
 
 from .random import derive_seed, isolated_rng
+from .types import Batch, Consumption, Paradigm
+
+SampleT = TypeVar("SampleT")
 
 
 @dataclass(frozen=True)
 class Cursor:
+    """Durable progress within a block, saved only after a successful update.
+
+    start: First arrival position of the current chunk.
+    epoch: Zero-based pass within that chunk.
+    offset: Next minibatch's position within the current pass.
+    updates: Completed optimizer steps in the current chunk.
+    """
+
     start: int = 0
     epoch: int = 0
     offset: int = 0
     updates: int = 0
 
 
-def schedule(length, consume, batch_size, seed, cursor=Cursor()):
+def schedule(
+    length: int,
+    consume: Consumption,
+    batch_size: int,
+    seed: int,
+    cursor: Cursor = Cursor(),
+) -> Iterator[tuple[list[tuple[int, int]], Cursor, int]]:
     """Yield index/augmentation-seed pairs, next cursor, and new arrival count."""
     start, epoch, offset, updates = cursor.start, cursor.epoch, cursor.offset, cursor.updates
     while start < length:
@@ -58,14 +79,14 @@ def schedule(length, consume, batch_size, seed, cursor=Cursor()):
         start, epoch, offset, updates = start + size, 0, 0, 0
 
 
-class SeededView(Dataset):
-    def __init__(self, data):
+class SeededView(Dataset[SampleT]):
+    def __init__(self, data: Dataset[SampleT]) -> None:
         self.data = data
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.data)
 
-    def __getitem__(self, index_seed):
+    def __getitem__(self, index_seed: tuple[int, int]) -> SampleT:
         index, seed = index_seed
         # torch augmentation, numpy policies and Python policies all see the same
         # logical visit regardless of worker assignment or loader prefetch depth.
@@ -73,29 +94,36 @@ class SeededView(Dataset):
             return self.data[index]
 
 
-class FittingView(Dataset):
-    def __init__(self, data, start, end, seed):
+class FittingView(Dataset[SampleT]):
+    def __init__(self, data: Dataset[SampleT], start: int, end: int, seed: int) -> None:
         self.data, self.start, self.end, self.seed = SeededView(data), start, end, seed
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self.end - self.start
 
-    def __getitem__(self, index):
+    def __getitem__(self, index: int) -> SampleT:
         position = self.start + index
         return self.data[position, derive_seed(self.seed, position, 0)]
 
 
 class BatchSampler:
-    def __init__(self, data, consume, batch_size, seed, cursor):
+    def __init__(
+        self,
+        data: Dataset[Any],
+        consume: Consumption,
+        batch_size: int,
+        seed: int,
+        cursor: Cursor,
+    ) -> None:
         self.args = (len(data), consume, batch_size, seed, cursor)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[list[tuple[int, int]]]:
         for indices, _, _ in schedule(*self.args):
             yield indices
 
 
 class Consumer:
-    def __init__(self, paradigm, batch_size, *, num_workers=0, seed=0):
+    def __init__(self, paradigm: Paradigm, batch_size: int, *, num_workers: int = 0, seed: int = 0) -> None:
         if batch_size < 1 or num_workers < 0:
             raise ValueError("invalid batch_size or num_workers")
         self.paradigm = paradigm
@@ -109,10 +137,10 @@ class Consumer:
         self.last_fitting = None
         self._schedule = self._loader = None
 
-    def __iter__(self):
+    def __iter__(self) -> Consumer:
         return self
 
-    def _open(self):
+    def _open(self) -> None:
         seed = derive_seed(self.seed, self.block_serial)
         self._schedule = iter(schedule(len(self.block.data), self.block.consume, self.batch_size, seed, self.cursor))
         self._view = SeededView(self.block.data)
@@ -122,7 +150,7 @@ class Consumer:
             self._loader = iter(DataLoader(self._view, batch_sampler=sampler, num_workers=self.num_workers,
                                            generator=generator))
 
-    def __next__(self):
+    def __next__(self) -> Batch:
         if self.pending is not None:
             raise RuntimeError("commit the completed minibatch before requesting another")
         while not self.done:
@@ -148,7 +176,7 @@ class Consumer:
             return tuple(batch)
         raise StopIteration
 
-    def commit(self):
+    def commit(self) -> None:
         if self.pending is None:
             raise RuntimeError("no pending minibatch")
         self.cursor, arrivals, exposures, bounds = self.pending
@@ -157,11 +185,11 @@ class Consumer:
         self.counters["training_exposures"] += exposures
         self.pending = None
 
-    def fitting_data(self):
+    def fitting_data(self) -> FittingView[Any] | None:
         """An evaluation view of the last consumed chunk, never future inputs."""
         return FittingView(*self.last_fitting) if self.last_fitting is not None else None
 
-    def state_dict(self):
+    def state_dict(self) -> dict[str, Any]:
         if self.pending is not None:
             raise RuntimeError("checkpoint only after commit")
         return deepcopy({"cursor": vars(self.cursor), "counters": self.counters,
@@ -169,7 +197,7 @@ class Consumer:
                          "paradigm_state": self.paradigm.state_dict(), "block_serial": self.block_serial,
                          "done": self.done, "batch_size": self.batch_size, "seed": self.seed})
 
-    def load_state_dict(self, state):
+    def load_state_dict(self, state: dict[str, Any]) -> None:
         if state["batch_size"] != self.batch_size or state["seed"] != self.seed:
             raise ValueError("consumer seed and batch size must match on resume")
         self.pending = None

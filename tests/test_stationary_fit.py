@@ -1,15 +1,20 @@
 """Calibrate learnable stationary controls, without asserting plasticity loss."""
+from __future__ import annotations
+
 import pytest
 import torch
 
 from testbed.core.consumption import Consumer
 from testbed.core.factory import make_model
 from testbed.core.losses import supervised_loss
+from testbed.core.types import Paradigm
 from testbed.data import tensor_bundle
 from testbed.training import make_paradigm
 
 
-def fit_objective(paradigm, *, hidden_sizes, batch_size, lr):
+def fit_objective(
+    paradigm: Paradigm, *, hidden_sizes: list[int] | tuple[int, ...], batch_size: int, lr: float,
+) -> tuple[float, float, int]:
     learner = make_model("backprop", "mlp", problem=paradigm.problem,
                          model_config={"hidden_sizes": hidden_sizes},
                          optimizer_config={"name": "adam", "lr": lr}, seed=2, method_seed=7)
@@ -26,7 +31,7 @@ def fit_objective(paradigm, *, hidden_sizes, batch_size, lr):
 
 
 @pytest.mark.parametrize("family", ["class_remap", "pixel_permutation", "class_incremental"])
-def test_stationary_classification_objectives_are_learnable(family):
+def test_stationary_classification_objectives_are_learnable(family: str) -> None:
     config = dict(dataset="synthetic", task_samples="pool", chunk_size="task", epochs=None,
                   updates=100, validation_fraction=0,
                   data_options=dict(n_train=24, n_test=12, num_classes=3, input_shape=[1, 4, 4]))
@@ -40,7 +45,7 @@ def test_stationary_classification_objectives_are_learnable(family):
     assert terminal < 0.01 and terminal < initial / 100
 
 
-def test_s05_fixed_iid_scalar_targets_are_learnable():
+def test_s05_fixed_iid_scalar_targets_are_learnable() -> None:
     # Independent input coordinates make this random finite target problem
     # representable by a scalar linear readout, including its nonzero mean.
     inputs = torch.eye(8).reshape(8, 1, 2, 4)

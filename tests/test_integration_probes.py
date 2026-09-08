@@ -1,4 +1,8 @@
+from __future__ import annotations
+
 from copy import deepcopy
+from pathlib import Path
+from typing import Any
 
 import pytest
 import torch
@@ -14,7 +18,9 @@ from testbed.testing.random_teacher import TeacherProbeConfig
 from testbed.testing.random_teacher import run as teacher_probe
 
 
-def recipe(output, *, regression=False, method=None):
+def recipe(
+    output: str | Path, *, regression: bool = False, method: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     data = dict(dataset="synthetic", num_tasks=2, task_samples=12, chunk_size=6, epochs=2,
                 validation_fraction=0, data_options=dict(n_train=24, n_test=12, num_classes=3, input_shape=[1, 4, 4]))
     if regression:
@@ -27,7 +33,7 @@ def recipe(output, *, regression=False, method=None):
                              seen_input_capacity=12), seed=3, output_dir=str(output))
 
 
-def test_exact_training_resume(tmp_path):
+def test_exact_training_resume(tmp_path: Path) -> None:
     full = train(recipe(tmp_path / "full"))
     config = recipe(tmp_path / "resumed")
     partial = train(config, stop_after_updates=5)
@@ -37,7 +43,7 @@ def test_exact_training_resume(tmp_path):
     assert_state_equal(full["consumer_state"], resumed["consumer_state"])
 
 
-def test_teacher_classification_fixed_targets_and_optimizer_policy(tmp_path):
+def test_teacher_classification_fixed_targets_and_optimizer_policy(tmp_path: Path) -> None:
     source = train(recipe(tmp_path / "source"))
     original = deepcopy(source)
     config = TeacherProbeConfig(updates=3, n_samples=6, batch_size=4, eval_every_updates=2,
@@ -59,7 +65,7 @@ def test_teacher_classification_fixed_targets_and_optimizer_policy(tmp_path):
     assert carried.completed_updates == 0
 
 
-def test_probe_loads_network_moments_excludes_infer_auxiliary(tmp_path):
+def test_probe_loads_network_moments_excludes_infer_auxiliary(tmp_path: Path) -> None:
     source = train(recipe(tmp_path / "source", method=dict(name="infer", coefficient=.01, num_heads=2, target_scale=2)))
     config = TeacherProbeConfig(updates=1, n_samples=4, load_optimizer_state=True)
     learner = probe_network(source, config, fresh=False, device="cpu", seed=0)
@@ -70,7 +76,7 @@ def test_probe_loads_network_moments_excludes_infer_auxiliary(tmp_path):
         probe_network(source, config, fresh=False, device="cpu", seed=0)
 
 
-def test_seen_prefix_and_insufficient_initialization_bank(tmp_path):
+def test_seen_prefix_and_insufficient_initialization_bank(tmp_path: Path) -> None:
     train(recipe(tmp_path / "source"))
     initial = load_checkpoint(tmp_path / "source/checkpoints/init.pt")
     early = load_checkpoint(tmp_path / "source/checkpoints/update_4.pt")
@@ -81,7 +87,7 @@ def test_seen_prefix_and_insufficient_initialization_bank(tmp_path):
     assert set(ids.tolist()) <= set(bank["ids"][:early["seen_inputs"]["prefix"]].tolist())
 
 
-def test_scheduled_probe_and_fresh_window_do_not_change_primary_training(tmp_path):
+def test_scheduled_probe_and_fresh_window_do_not_change_primary_training(tmp_path: Path) -> None:
     plain = train(recipe(tmp_path / "plain"))
     probe_path = tmp_path / "probe.yaml"
     probe_path.write_text(yaml.safe_dump(dict(paradigm="random_teacher", probe=dict(updates=2, n_samples=4, batch_size=4))))
@@ -93,7 +99,7 @@ def test_scheduled_probe_and_fresh_window_do_not_change_primary_training(tmp_pat
     assert_state_equal(plain["consumer_state"], probed["consumer_state"])
 
 
-def test_offset_exact_inputs_independent_offsets_and_regression_teacher(tmp_path):
+def test_offset_exact_inputs_independent_offsets_and_regression_teacher(tmp_path: Path) -> None:
     source = train(recipe(tmp_path / "source", regression=True))
     fixed = source["paradigm_state"]["fixed_regression"]
     config = OffsetProbeConfig(updates=2, batch_size=4, eval_every_updates=1)
@@ -112,7 +118,7 @@ def test_offset_exact_inputs_independent_offsets_and_regression_teacher(tmp_path
         offset_probe(config, source, tmp_path / "missing")
 
 
-def test_same_fixed_data_probes_independent_of_launch_order(tmp_path):
+def test_same_fixed_data_probes_independent_of_launch_order(tmp_path: Path) -> None:
     source = train(recipe(tmp_path / "source"))
     config = TeacherProbeConfig(updates=2, n_samples=5, batch_size=3)
     a = teacher_probe(config, source, tmp_path / "a", seed=10)
@@ -121,7 +127,7 @@ def test_same_fixed_data_probes_independent_of_launch_order(tmp_path):
     assert a.comparisons == b.comparisons
 
 
-def test_probe_cache_distinguishes_checkpoint_age_in_same_directory(tmp_path):
+def test_probe_cache_distinguishes_checkpoint_age_in_same_directory(tmp_path: Path) -> None:
     source = train(recipe(tmp_path / "source"))
     early = load_checkpoint(tmp_path / "source/checkpoints/update_4.pt")
     config = TeacherProbeConfig(updates=1, n_samples=4, batch_size=4)

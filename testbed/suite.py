@@ -1,29 +1,34 @@
 """Finite, sequential suites with saved job manifests and paired probe seeds."""
+from __future__ import annotations
+
 import glob
 import itertools
 import json
 import statistics
+from collections.abc import Iterable, Sequence
 from copy import deepcopy
 from pathlib import Path
+from typing import Any
 
 from testbed.core.checkpoint import atomic_save, load_checkpoint
 from testbed.core.config import load_yaml, set_dotted
 from testbed.core.metrics import write_json
+from testbed.core.types import ProblemSpec
 from testbed.testing.common import fingerprint
 
 
-def resolve_path(path, config_dir):
+def resolve_path(path: str | Path, config_dir: str | Path) -> Path:
     path = Path(path)
     return path if path.is_absolute() or path.exists() else Path(config_dir) / path
 
 
-def _strict(recipe, allowed):
+def _strict(recipe: dict[str, Any], allowed: Iterable[str]) -> None:
     extra = set(recipe) - set(allowed) - {"kind", "output_dir"}
     if extra:
         raise ValueError(f"unknown suite fields: {sorted(extra)}")
 
 
-def checkpoint_jobs(recipe, config_dir):
+def checkpoint_jobs(recipe: dict[str, Any], config_dir: str | Path) -> list[dict[str, Any]]:
     _strict(recipe, {"probe_config", "checkpoints", "repeat_seeds", "device"})
     probe = load_yaml(resolve_path(recipe["probe_config"], config_dir))
     paths = set()
@@ -51,7 +56,7 @@ def checkpoint_jobs(recipe, config_dir):
     return jobs
 
 
-def experiment_jobs(recipe, config_dir):
+def experiment_jobs(recipe: dict[str, Any], config_dir: str | Path) -> list[dict[str, Any]]:
     _strict(recipe, {"recipes", "grid", "seeds", "probes", "device"})
     grid = recipe.get("grid", {})
     if any(not isinstance(v, list) or not v for v in grid.values()):
@@ -79,7 +84,7 @@ def experiment_jobs(recipe, config_dir):
     return jobs
 
 
-def aggregate(jobs):
+def aggregate(jobs: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     groups = {}
     for job in jobs:
         output = Path(job["config"]["output_dir"])
@@ -103,7 +108,7 @@ def aggregate(jobs):
     return result
 
 
-def transfer_branches(recipe, config_dir):
+def transfer_branches(recipe: dict[str, Any], config_dir: str | Path) -> None:
     from testbed.core.trainer import train
     from testbed.training import make_paradigm
     from testbed.training.class_incremental.paradigm import retarget_state
@@ -158,18 +163,62 @@ def transfer_branches(recipe, config_dir):
         _probes(recipe.get("probes", []), config_dir, result, Path(job["output_dir"]) / "probes")
 
 
-def as_problem(problem):
+def as_problem(problem: ProblemSpec) -> dict[str, Any]:
     from dataclasses import asdict
     return asdict(problem)
 
 
-def _probes(paths, config_dir, checkpoint, output):
+def _probes(
+    paths: Sequence[str | Path],
+    config_dir: str | Path,
+    checkpoint: dict[str, Any],
+    output: str | Path,
+) -> None:
     from testbed.cli import run_test
     for path in paths:
         run_test(load_yaml(resolve_path(path, config_dir)), checkpoint, output)
 
 
-def run_suite(recipe, *, config_dir="."):
+def run_suite(recipe: dict[str, Any], *, config_dir: str | Path = ".") -> str:
+    """Run one sequential suite; only fields for its kind are accepted.
+
+    kind: "experiments" (default), "checkpoint_probes", or "transfer_branches".
+    output_dir: Required root for the job manifest and all generated run results.
+    device: Optional override for training recipes in experiments/transfer_branches,
+        or probe recipes in checkpoint_probes. Post-training probes in the other
+        suite kinds use their own recipe's device (default "cpu").
+
+    experiments fields:
+        recipes: Required list of training YAML paths.
+        grid: Dotted config keys mapped to nonempty lists of candidate values;
+            every Cartesian-product combination is run. Omit for no overrides.
+        seeds: Independent master training seeds per combination; default [0].
+            Explicit sub-seeds inside a recipe stay fixed across these runs.
+        probes: Probe YAML paths to run on each final checkpoint; default [].
+            Their own seeds apply, or the source checkpoint's probe_seed if absent.
+
+    checkpoint_probes fields:
+        probe_config: Required path to one probe YAML recipe.
+        checkpoints: Required list of checkpoint paths/globs, e.g. update_*.pt.
+            Every pattern must match; duplicate paths are evaluated only once.
+        repeat_seeds: Probe seeds used for each checkpoint; default [0].
+            These replace the recipe seed; probe.repeats still runs within each seed.
+
+    transfer_branches fields:
+        source_recipe: Training YAML with progression="transfer"; run through
+            source_update. Set exactly one of this and source_checkpoint.
+        source_checkpoint: Existing transfer checkpoint at source_update.
+        source_update: Required positive absolute step index immediately after
+            the complete source budget, before any target training.
+        target_sizes: Required list of target pool sizes: integer counts,
+            fractions in (0, 1], or "all". Each branch inherits the same complete
+            learner state and replaces only the target stage's available pool.
+        probes: Probe YAML paths evaluated after each target branch; default [].
+
+    Recipe/checkpoint paths resolve from the working directory when they exist
+    there, otherwise relative to config_dir. output_dir is relative to the working
+    directory. Existing final experiment checkpoints are reused.
+    """
     from testbed.cli import run_test
     from testbed.core.trainer import train
     output = Path(recipe["output_dir"])

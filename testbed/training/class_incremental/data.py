@@ -1,29 +1,37 @@
 """Nested availability, paper-style mixed partitions, and arrival mixtures."""
 
+from __future__ import annotations
+
 import math
+from collections.abc import Sequence
 
 import torch
 from torch.utils.data import Dataset
 
+from testbed.data.datasets import PreparedSplit
 
-class IncrementalData(Dataset):
-    def __init__(self, source, indices, label_map, *, augment=False):
+
+class IncrementalData(Dataset[tuple[torch.Tensor, int, torch.Tensor]]):
+    def __init__(
+        self, source: PreparedSplit, indices: torch.Tensor | Sequence[int],
+        label_map: dict[int, int], *, augment: bool = False,
+    ) -> None:
         self.source, self.indices = source, torch.as_tensor(indices, dtype=torch.long)
         self.label_map, self.augment = dict(label_map), augment
 
     @property
-    def ids(self):
+    def ids(self) -> torch.Tensor:
         return self.source.ids[self.indices]
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.indices)
 
-    def __getitem__(self, index):
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, int, torch.Tensor]:
         x, y, source_id = self.source.read(int(self.indices[index]), augment=self.augment)
         return x, self.label_map[int(y)], source_id
 
 
-def resolve_sizes(values, maximum, *, classes=False):
+def resolve_sizes(values: Sequence[int | float | str], maximum: int, *, classes: bool = False) -> list[int]:
     resolved = []
     for value in values:
         if value == "all":
@@ -44,7 +52,10 @@ def resolve_sizes(values, maximum, *, classes=False):
     return resolved
 
 
-def mixed_partitions(pool, labels, class_order, sizes, fraction, generator):
+def mixed_partitions(
+    pool: torch.Tensor, labels: torch.Tensor, class_order: Sequence[int], sizes: list[int],
+    fraction: float, generator: torch.Generator,
+) -> list[torch.Tensor]:
     """P02 Appendix A.3: disjoint IID and class components, then cumulative unions.
 
     Exact requested totals constrain the partition. An incompatible class grouping
@@ -69,7 +80,10 @@ def mixed_partitions(pool, labels, class_order, sizes, fraction, generator):
     return [torch.cat(partitions[:i + 1]) for i in range(len(sizes))]
 
 
-def mixture_alpha(transition, chunk, duration, *, gamma=0.5, values=None):
+def mixture_alpha(
+    transition: str, chunk: int, duration: int, *, gamma: float = 0.5,
+    values: Sequence[float] | None = None,
+) -> float:
     """One-based arrival-chunk coefficient; finite ramps end with full-pool draws."""
     if chunk < 1:
         raise ValueError("Mixture chunk indices start at one")
@@ -86,7 +100,11 @@ def mixture_alpha(transition, chunk, duration, *, gamma=0.5, values=None):
     raise ValueError(f"Unknown transition {transition!r}")
 
 
-def mixture_arrivals(old, expanded, count, chunk_size, transition, duration, generator, *, gamma=0.5, values=None):
+def mixture_arrivals(
+    old: torch.Tensor, expanded: torch.Tensor, count: int, chunk_size: int, transition: str,
+    duration: int, generator: torch.Generator, *, gamma: float = 0.5,
+    values: Sequence[float] | None = None,
+) -> torch.Tensor:
     indices = torch.empty(count, dtype=torch.long)
     for start in range(0, count, chunk_size):
         end = min(start + chunk_size, count)

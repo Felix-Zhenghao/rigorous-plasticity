@@ -1,3 +1,4 @@
+# Field meanings and allowed values: docs/configuration.md.
 # Controlled IID-normal variant of S05. Offset sweeps share seed and exact inputs/residuals.
 paradigm: class_remap
 data:

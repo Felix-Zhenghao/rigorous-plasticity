@@ -1,3 +1,4 @@
+# Field meanings and allowed values: docs/configuration.md.
 kind: transfer_branches
 source_recipe: configs/s16_transfer.yaml
 # This recipe consumes 10000 source updates before beginning target training.

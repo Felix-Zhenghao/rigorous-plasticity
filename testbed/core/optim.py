@@ -1,12 +1,34 @@
 """Ordinary optimizer and update-based learning-rate construction."""
+from __future__ import annotations
+
 import math
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, is_dataclass
+from typing import Any
 
 import torch
 
 
 @dataclass(frozen=True)
 class OptimizerConfig:
+    """PyTorch optimizer settings; unused optimizer-specific options must stay default.
+
+    name: "sgd", "adam", or "adamw". AdamW decouples weight decay from the
+        gradient; SGD and Adam add weight_decay * parameter to the gradient.
+    lr: Nonnegative base learning rate; trainer.lr_schedule scales/replaces it.
+    momentum: SGD velocity decay in [0, 1); 0 disables momentum.
+    dampening: SGD fraction of the new gradient omitted from momentum updates,
+        in [0, 1]. Has no effect without momentum; Nesterov requires 0.
+    nesterov: Use SGD Nesterov momentum; requires momentum>0 and dampening=0.
+    betas: Adam/AdamW decay rates for first and second moments, each in [0, 1).
+        Larger values retain gradient history longer.
+    eps: Positive Adam/AdamW denominator stabilizer, added after the square root.
+    weight_decay: Nonnegative decay coefficient, applied to every optimized
+        parameter, including biases, normalization, and auxiliary parameters.
+        It adds to any configured maintenance/regularization method.
+    amsgrad: Adam/AdamW variant using a running maximum of second moments.
+    """
+
     name: str = "adam"
     lr: float = 0.001
     momentum: float = 0.0
@@ -17,7 +39,7 @@ class OptimizerConfig:
     weight_decay: float = 0.0
     amsgrad: bool = False
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         object.__setattr__(self, "betas", tuple(self.betas))
         if self.name not in {"sgd", "adam", "adamw"}:
             raise ValueError(f"unknown optimizer: {self.name}")
@@ -36,12 +58,15 @@ class OptimizerConfig:
             raise ValueError("Nesterov requires momentum and zero dampening")
 
 
-def optimizer_dict(config):
+def optimizer_dict(config: OptimizerConfig | Mapping[str, Any]) -> dict[str, Any]:
     config = asdict(config) if is_dataclass(config) else dict(config)
     return asdict(OptimizerConfig(**config))
 
 
-def make_optimizer(named_parameters, config):
+def make_optimizer(
+    named_parameters: Iterable[tuple[str, torch.nn.Parameter]],
+    config: OptimizerConfig | Mapping[str, Any],
+) -> torch.optim.Optimizer:
     cfg = optimizer_dict(config)
     pairs = [(n, p) for n, p in named_parameters if p.requires_grad]
     if len({id(p) for _, p in pairs}) != len(pairs):
@@ -54,7 +79,27 @@ def make_optimizer(named_parameters, config):
     return cls(groups, **common, **{k: cfg[k] for k in ("betas", "eps", "amsgrad")})
 
 
-def resolve_schedule(schedule):
+def resolve_schedule(schedule: str | Mapping[str, Any] | None) -> dict[str, Any]:
+    """Validate an update-based LR mapping; a string supplies only its name.
+
+    name: "constant" keeps optimizer.lr; "linear"/"cosine" interpolate from
+        optimizer.lr to terminal_lr; "step" multiplies it by gamma per milestone.
+    warmup_updates: Nonnegative number W of initial updates using
+        optimizer.lr * (t + 1) / W, where t counts already completed updates.
+        0 disables warmup. Warmup takes precedence over the named schedule.
+    horizon: Required for linear/cosine; absolute completed-update index H at
+        which terminal_lr is reached. H must exceed warmup_updates. Between
+        warmup W and H, progress is (t - W)/(H - W); afterwards LR stays terminal.
+    terminal_lr: Nonnegative final LR for linear/cosine; defaults to 0.
+    milestones: Required for step; sorted, distinct positive completed-update
+        indices. A milestone M affects the step taken after M completed updates.
+        Milestones reached during warmup are counted once warmup ends.
+    gamma: Step multiplier in (0, 1], default 0.1; after k reached milestones,
+        LR is optimizer.lr * gamma**k. 1 leaves the LR unchanged.
+
+    horizon/terminal_lr are rejected for constant/step; milestones/gamma are
+    rejected for other schedules. None or an empty mapping means constant.
+    """
     cfg = {"name": schedule} if isinstance(schedule, str) else dict(schedule or {"name": "constant"})
     allowed = {"name", "horizon", "terminal_lr", "warmup_updates", "milestones", "gamma"}
     if set(cfg) - allowed:
@@ -83,7 +128,11 @@ def resolve_schedule(schedule):
     return cfg
 
 
-def learning_rate(config, schedule, completed_updates):
+def learning_rate(
+    config: OptimizerConfig | Mapping[str, Any],
+    schedule: str | Mapping[str, Any] | None,
+    completed_updates: int,
+) -> float:
     base = config.lr if is_dataclass(config) else config["lr"]
     cfg = resolve_schedule(schedule)
     t = completed_updates
@@ -99,7 +148,12 @@ def learning_rate(config, schedule, completed_updates):
     return cfg["terminal_lr"] + (base - cfg["terminal_lr"]) * factor
 
 
-def set_learning_rate(optimizer, config, schedule, completed_updates):
+def set_learning_rate(
+    optimizer: torch.optim.Optimizer,
+    config: OptimizerConfig | Mapping[str, Any],
+    schedule: str | Mapping[str, Any] | None,
+    completed_updates: int,
+) -> float:
     lr = learning_rate(config, schedule, completed_updates)
     for group in optimizer.param_groups:
         group["lr"] = lr

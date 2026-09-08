@@ -1,3 +1,4 @@
+# Field meanings and allowed values: docs/configuration.md.
 # Half-to-full cumulative fitting (P01/P02 setting), with explicit illustrative fitting budgets.
 paradigm: class_incremental
 data:

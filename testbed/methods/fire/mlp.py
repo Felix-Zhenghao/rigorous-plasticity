@@ -1,13 +1,33 @@
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
+
+import torch
 from torch import nn
 
 from testbed.core.factory import make_network
+from testbed.core.optim import OptimizerConfig
+from testbed.core.types import ProblemSpec
+from testbed.models.config import MLPConfig
 
-from .config import CONFIG_CLASS
+from .config import CONFIG_CLASS, FIREConfig
 from .learner import FIRELearner
 
 
-def build(*, problem, model_config, method_config, optimizer_config, lr_schedule="constant",
-          grad_clip_norm=None, device="cpu", seed=0, start_update=0, method_seed=None):
+def build(
+    *,
+    problem: ProblemSpec,
+    model_config: MLPConfig | Mapping[str, Any],
+    method_config: FIREConfig | Mapping[str, Any],
+    optimizer_config: OptimizerConfig | Mapping[str, Any],
+    lr_schedule: str | Mapping[str, Any] | None = "constant",
+    grad_clip_norm: float | None = None,
+    device: str | torch.device = "cpu",
+    seed: int = 0,
+    start_update: int = 0,
+    method_seed: int | None = None,
+) -> FIRELearner:
     config = method_config if isinstance(method_config, CONFIG_CLASS) else CONFIG_CLASS(**method_config)
     network = make_network("mlp", problem=problem, model_config=model_config, device=device, seed=seed)
     selected = {f"{name}.weight": module.weight for name, module in network.named_modules()

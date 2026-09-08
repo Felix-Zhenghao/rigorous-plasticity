@@ -1,12 +1,37 @@
+from __future__ import annotations
+
 import argparse
 import sys
+from collections.abc import Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from testbed.core.config import load_yaml, strict_dataclass
 from testbed.core.random import isolated_rng
 
+if TYPE_CHECKING:
+    from testbed.data.datasets import DatasetInput
+    from testbed.testing.common import ProbeResult
 
-def run_test(recipe, checkpoint, output_dir=None, *, datasets=None):
+
+def run_test(
+    recipe: dict[str, Any],
+    checkpoint: str | Path | dict[str, Any],
+    output_dir: str | Path | None = None,
+    *,
+    datasets: DatasetInput = None,
+) -> ProbeResult:
+    """Run a standalone or scheduled probe from a strict recipe mapping.
+
+    paradigm: "random_teacher" or "offset_refit"; chooses the probe config.
+    probe: TeacherProbeConfig or OffsetProbeConfig fields, respectively.
+    seed: Probe RNG seed; omitted values use the checkpoint's probe_seed.
+    device: PyTorch device for fitting; defaults to "cpu" for standalone tests.
+    data_root: Optional replacement dataset cache root; otherwise use the source run.
+    output_dir: Root for results; default is runs/probes/<source>/update_<N>.
+        The caller's output_dir takes precedence, and paradigm/seed subdirectories
+        are appended. Source and assay fingerprints identify each fitting result.
+    """
     from testbed.testing.common import source_state
     from testbed.testing.offset_refit import OffsetProbeConfig
     from testbed.testing.offset_refit import run as offset
@@ -31,7 +56,12 @@ def run_test(recipe, checkpoint, output_dir=None, *, datasets=None):
                    data_root=recipe.get("data_root"), datasets=datasets)
 
 
-def main(argv=None, *, default_command=None, expected_paradigm=None):
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    default_command: str | None = None,
+    expected_paradigm: str | None = None,
+) -> None:
     argv = list(sys.argv[1:] if argv is None else argv)
     if default_command:
         argv.insert(0, default_command)

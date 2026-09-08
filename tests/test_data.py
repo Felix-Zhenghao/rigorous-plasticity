@@ -1,38 +1,48 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, TypeAlias
+
 import pytest
 import torch
+from torch.utils.data import Dataset
 
 from testbed.core.consumption import Consumer
 from testbed.data import DATASETS, tensor_bundle
-from testbed.data.datasets import load_dataset
-from testbed.training import make_paradigm
+from testbed.data.datasets import DatasetBundle, DatasetInput, load_dataset
+from testbed.training import ClassIncremental, ClassRemap, PixelPermutation, make_paradigm
 from testbed.training.class_incremental import ClassIncrementalConfig
 from testbed.training.class_incremental.data import mixture_alpha, mixture_arrivals
 from testbed.training.class_remap import ClassRemapConfig
 from testbed.training.pixel_permutation import PixelPermutationConfig
 
+Example: TypeAlias = tuple[torch.Tensor, torch.Tensor | int, torch.Tensor]
 
-def bundle(name="toy", *, channels=1, labels=(0, 1, 2, 3)):
+
+def bundle(name: str = "toy", *, channels: int = 1, labels: tuple[int, ...] = (0, 1, 2, 3)) -> DatasetBundle:
     targets = torch.tensor(labels).repeat_interleave(10)
     inputs = torch.arange(len(targets) * channels * 16).float().reshape(-1, channels, 4, 4) / 1000
     return tensor_bundle(inputs, targets, inputs + 0.1, targets, name=name, output_ids=labels)
 
 
-def paradigm(name="class_remap", data=None, **overrides):
+def paradigm(
+    name: str = "class_remap", data: DatasetInput = None, **overrides: Any,
+) -> ClassRemap | PixelPermutation | ClassIncremental:
     config = dict(dataset="toy", task_samples="pool", chunk_size="task", validation_fraction=0)
     config.update(stage_sizes=[2, 4]) if name == "class_incremental" else config.update(num_tasks=2)
     config.update(overrides)
     return make_paradigm(name, config, datasets=data or bundle(), seed=17)
 
 
-def rows(data):
+def rows(data: Dataset[Example]) -> list[Example]:
     return [data[i] for i in range(len(data))]
 
 
-def by_id(data):
+def by_id(data: Dataset[Example]) -> dict[int, tuple[torch.Tensor, int]]:
     return {int(source_id): (x, int(y)) for x, y, source_id in rows(data)}
 
 
-def test_registered_metadata_and_stratified_split_identity():
+def test_registered_metadata_and_stratified_split_identity() -> None:
     assert {"mnist", "fashion_mnist", "emnist_balanced", "cifar10", "cifar100", "svhn", "tiny_imagenet"} <= DATASETS.keys()
     p = paradigm(validation_fraction=0.2, pool_size=12)
     ids = p.metadata["split_ids"]
@@ -46,7 +56,7 @@ def test_registered_metadata_and_stratified_split_identity():
     assert synthetic.input_shape == (1, 8, 8)
 
 
-def test_same_class_mapping_stable_labels_recurrence_and_source_ids():
+def test_same_class_mapping_stable_labels_recurrence_and_source_ids() -> None:
     p = paradigm(num_tasks=4, recurrence_period=2, stable_classes=[0], first_mapping="identity")
     first = by_id(p.get_data().data)
     second_data = p.get_data().data
@@ -61,7 +71,7 @@ def test_same_class_mapping_stable_labels_recurrence_and_source_ids():
     assert len(set(second_data.ids.tolist())) == len(second_data)
 
 
-def test_class_probability_allocation_and_no_silent_replacement():
+def test_class_probability_allocation_and_no_silent_replacement() -> None:
     p = paradigm(task_samples=7, class_probs=[0.25] * 4, first_mapping="identity")
     labels = torch.tensor([y for _, y, _ in rows(p.get_data().data)])
     assert torch.bincount(labels, minlength=4).tolist() == [2, 2, 2, 1]
@@ -74,7 +84,7 @@ def test_class_probability_allocation_and_no_silent_replacement():
     assert all(y == 0 for _, y, _ in rows(repeated))
 
 
-def test_pool_refresh_and_malformed_schedules():
+def test_pool_refresh_and_malformed_schedules() -> None:
     fixed = paradigm(pool_size=8)
     assert set(fixed.get_data().data.ids.tolist()) == set(fixed.get_data().data.ids.tolist())
     refreshed = paradigm(pool_size=8, pool_refresh="per_task")
@@ -88,7 +98,7 @@ def test_pool_refresh_and_malformed_schedules():
 
 
 @pytest.mark.parametrize("axes", ["spatial", "all_values"])
-def test_pixel_train_eval_use_original_coordinates_and_identical_transform(axes):
+def test_pixel_train_eval_use_original_coordinates_and_identical_transform(axes: str) -> None:
     p = paradigm("pixel_permutation", data=bundle(channels=3), permutation_axes=axes)
     task = p.get_data().data
     source_index = int(task.indices[0])
@@ -104,7 +114,7 @@ def test_pixel_train_eval_use_original_coordinates_and_identical_transform(axes)
     assert torch.equal(p.get_unseen_data("test")[0][0], original_test)
 
 
-def test_partial_pixel_recurrence_and_eval_do_not_advance_rng():
+def test_partial_pixel_recurrence_and_eval_do_not_advance_rng() -> None:
     p = paradigm("pixel_permutation", num_tasks=4, recurrence_period=2, permuted_fraction=[0, 0.5, 0, 0.5])
     assert torch.equal(p.permutations[0], torch.arange(16))
     assert int((p.permutations[1] != torch.arange(16)).sum()) <= 8
@@ -118,7 +128,7 @@ def test_partial_pixel_recurrence_and_eval_do_not_advance_rng():
         paradigm("pixel_permutation", num_tasks=3, recurrence_period=2, permuted_fraction=[0, 1, 1])
 
 
-def test_heterogeneous_schedules_keep_partial_chunks_and_distinct_clocks():
+def test_heterogeneous_schedules_keep_partial_chunks_and_distinct_clocks() -> None:
     p = paradigm("pixel_permutation", task_samples=[5, 7], chunk_size=[2, 3], epochs=[2, None], updates=[None, 3], shuffle_each_epoch=False)
     consumer = Consumer(p, batch_size=2, seed=23)
     sizes = []
@@ -130,7 +140,7 @@ def test_heterogeneous_schedules_keep_partial_chunks_and_distinct_clocks():
     assert consumer.counters == {"arrivals": 12, "training_exposures": 23}
 
 
-def test_class_incremental_cumulative_availability_and_fixed_canonical_outputs():
+def test_class_incremental_cumulative_availability_and_fixed_canonical_outputs() -> None:
     p = paradigm("class_incremental", class_order=[3, 1, 2, 0])
     assert p.problem.output_ids == (0, 1, 2, 3)
     initial = p.get_data().data
@@ -142,7 +152,7 @@ def test_class_incremental_cumulative_availability_and_fixed_canonical_outputs()
     assert p.problem.output_ids == (0, 1, 2, 3)
 
 
-def test_class_incremental_explicit_subset_defines_the_final_output_space():
+def test_class_incremental_explicit_subset_defines_the_final_output_space() -> None:
     p = paradigm("class_incremental", stage_sizes=[1, 2], class_order=[3, 1])
     assert p.problem.output_ids == (1, 3)
     assert set(y for _, y, _ in rows(p.get_data().data)) == {3}
@@ -150,7 +160,7 @@ def test_class_incremental_explicit_subset_defines_the_final_output_space():
 
 
 @pytest.mark.parametrize("order,fraction", [("iid", 1), ("class_ordered", 1), ("mixed", 0.5), ("mixed", 1)])
-def test_example_expansion_constructs_disjoint_arrival_partitions(order, fraction):
+def test_example_expansion_constructs_disjoint_arrival_partitions(order: str, fraction: float) -> None:
     p = paradigm("class_incremental", progression="examples", stage_sizes=[0.5, 1.0], arrival_order=order,
                  uniform_fraction=fraction, class_order=[0, 1, 2, 3])
     first, second = p.stage_pools
@@ -161,7 +171,7 @@ def test_example_expansion_constructs_disjoint_arrival_partitions(order, fractio
     assert len(p.get_eval_data("test")) == 40
 
 
-def test_transfer_uses_only_destination_with_fixed_label_union():
+def test_transfer_uses_only_destination_with_fixed_label_union() -> None:
     source, destination = bundle("source"), bundle("destination", labels=(0, 1))
     p = paradigm("class_incremental", data={"toy": source, "destination": destination}, progression="transfer",
                  target_dataset="destination", stage_sizes=["all", 0.5], target_label_map={0: 10, 1: 11})
@@ -174,7 +184,7 @@ def test_transfer_uses_only_destination_with_fixed_label_union():
     assert p.problem.output_ids == (0, 1, 2, 3, 10, 11)
 
 
-def test_mixture_probabilities_endpoints_and_zero_update_initial_stage():
+def test_mixture_probabilities_endpoints_and_zero_update_initial_stage() -> None:
     assert [mixture_alpha("linear", r, 3) for r in (1, 2, 3, 4)] == [0, 0.5, 1, 1]
     assert mixture_alpha("exponential", 4, 4, gamma=0.9) == pytest.approx(1 - 0.9**50)
     assert mixture_alpha("exponential", 5, 4, gamma=0.9) == 1
@@ -192,7 +202,7 @@ def test_mixture_probabilities_endpoints_and_zero_update_initial_stage():
 
 
 @pytest.mark.parametrize("name", ["class_remap", "pixel_permutation", "class_incremental"])
-def test_data_state_restores_arrivals_targets_and_current_eval(name):
+def test_data_state_restores_arrivals_targets_and_current_eval(name: str) -> None:
     p = paradigm(name, sampling="with_replacement", task_samples=13)
     p.get_data()
     state = p.state_dict()
@@ -205,8 +215,8 @@ def test_data_state_restores_arrivals_targets_and_current_eval(name):
     assert [int(row[1]) for row in rows(p.get_eval_data("test"))] == [int(row[1]) for row in rows(restored.get_eval_data("test"))]
 
 
-def test_s05_offsets_share_exact_inputs_centered_residuals_and_ids():
-    def build(offset):
+def test_s05_offsets_share_exact_inputs_centered_residuals_and_ids() -> None:
+    def build(offset: float) -> ClassRemap | PixelPermutation | ClassIncremental:
         return paradigm(num_tasks=1, first_mapping="identity", target_mode="fixed_regression", target_mean=offset,
                         target_scale=3.0, pool_size=16, epochs=None, updates=4)
     zero, shifted = build(0), build(8)
@@ -225,7 +235,7 @@ def test_s05_offsets_share_exact_inputs_centered_residuals_and_ids():
         paradigm(num_tasks=1, first_mapping="identity", target_mode="fixed_regression", pool_size=16, task_samples=8)
 
 
-def test_scientifically_invalid_incremental_modes_fail():
+def test_scientifically_invalid_incremental_modes_fail() -> None:
     with pytest.raises(ValueError, match="replacement"):
         paradigm("class_incremental", transition="linear", transition_chunks=2)
     with pytest.raises(ValueError, match="fewer arrival chunks"):
@@ -239,7 +249,7 @@ def test_scientifically_invalid_incremental_modes_fail():
                                task_samples="pool", chunk_size="task", transition="linear")
 
 
-def test_dataset_stats_use_training_membership_only():
+def test_dataset_stats_use_training_membership_only() -> None:
     data = tensor_bundle(torch.zeros(8, 1, 2, 2), torch.tensor([0, 1] * 4),
                          torch.full((2, 1, 2, 2), 100.0), torch.tensor([0, 1]))
     p = paradigm(data=data, normalization="dataset_stats", validation_fraction=0.25)
@@ -247,12 +257,12 @@ def test_dataset_stats_use_training_membership_only():
     assert torch.isfinite(p.get_eval_data("test")[0][0]).all()
 
 
-def test_config_dataclasses_are_independent():
+def test_config_dataclasses_are_independent() -> None:
     for cls in (ClassRemapConfig, PixelPermutationConfig, ClassIncrementalConfig):
         assert cls.__bases__ == (object,)
 
 
-def test_teacher_regression_evaluation_keeps_the_training_target_function():
+def test_teacher_regression_evaluation_keeps_the_training_target_function() -> None:
     data = bundle()
     data.test.data = data.train.data
     p = paradigm(data=data, num_tasks=1, first_mapping="identity", target_mode="fixed_regression",
@@ -263,7 +273,7 @@ def test_teacher_regression_evaluation_keeps_the_training_target_function():
         assert torch.allclose(evaluation[raw_index][1], target, atol=1e-6)
 
 
-def test_retarget_state_preserves_source_and_changes_only_target_membership():
+def test_retarget_state_preserves_source_and_changes_only_target_membership() -> None:
     from testbed.training.class_incremental.paradigm import retarget_state
     datasets = {"toy": bundle("branch_source"), "destination": bundle("branch_target")}
     kwargs = dict(data=datasets, progression="transfer", target_dataset="destination")
@@ -279,7 +289,7 @@ def test_retarget_state_preserves_source_and_changes_only_target_membership():
         retarget_state(branch.state_dict(), original)
 
 
-def test_synthetic_variants_have_distinct_stable_raw_ids():
+def test_synthetic_variants_have_distinct_stable_raw_ids() -> None:
     first = load_dataset("synthetic", seed=12)
     repeated = load_dataset("synthetic", seed=12)
     other_seed = load_dataset("synthetic", seed=13)
@@ -289,7 +299,7 @@ def test_synthetic_variants_have_distinct_stable_raw_ids():
     assert not set(first.train.ids.tolist()) & set(other_shape.train.ids.tolist())
 
 
-def test_tiny_imagenet_uses_labeled_official_validation(tmp_path):
+def test_tiny_imagenet_uses_labeled_official_validation(tmp_path: Path) -> None:
     from PIL import Image
     root = tmp_path / "tiny-imagenet-200"
     root.mkdir()
@@ -309,17 +319,19 @@ def test_tiny_imagenet_uses_labeled_official_validation(tmp_path):
 
 @pytest.mark.parametrize("name,count", [("mnist", 10), ("fashion_mnist", 10), ("emnist_balanced", 47),
                                          ("cifar10", 10), ("cifar100", 100), ("svhn", 10)])
-def test_torchvision_adapters_keep_native_metadata_and_official_splits(monkeypatch, name, count):
+def test_torchvision_adapters_keep_native_metadata_and_official_splits(
+    monkeypatch: pytest.MonkeyPatch, name: str, count: int,
+) -> None:
     import sys
     from types import SimpleNamespace
     calls = []
     class Images:
         targets = labels = [0, 1]
-        def __init__(self, **kwargs):
+        def __init__(self, **kwargs: object) -> None:
             calls.append(kwargs)
-        def __len__(self):
+        def __len__(self) -> int:
             return 2
-        def __getitem__(self, index):
+        def __getitem__(self, index: int) -> tuple[torch.Tensor, int]:
             return torch.zeros(1, 4, 4), self.targets[index]
     datasets = SimpleNamespace(**{key: Images for key in ("MNIST", "FashionMNIST", "EMNIST", "CIFAR10", "CIFAR100", "SVHN")})
     monkeypatch.setitem(sys.modules, "torchvision", SimpleNamespace(datasets=datasets))
@@ -336,14 +348,14 @@ def test_torchvision_adapters_keep_native_metadata_and_official_splits(monkeypat
 
 @pytest.mark.parametrize("override", [dict(target_family="teacher"), dict(teacher={"name": "mlp"}),
                                       dict(target_mean=8), dict(target_scale=2), dict(center_targets=False), dict(omega=10)])
-def test_native_classification_rejects_inactive_regression_options(override):
+def test_native_classification_rejects_inactive_regression_options(override: dict[str, Any]) -> None:
     with pytest.raises(ValueError, match="require target_mode=fixed_regression"):
         ClassRemapConfig(dataset="toy", num_tasks=1, task_samples="pool", chunk_size="task", **override)
 
 
 @pytest.mark.parametrize("override", [dict(teacher={"name": "mlp"}), dict(omega=10),
                                       dict(target_family="teacher", teacher={"name": "mlp"}, omega=10)])
-def test_regression_rejects_options_ignored_by_its_target_family(override):
+def test_regression_rejects_options_ignored_by_its_target_family(override: dict[str, Any]) -> None:
     with pytest.raises(ValueError, match="applies only"):
         ClassRemapConfig(dataset="toy", num_tasks=1, task_samples="pool", chunk_size="task",
                          target_mode="fixed_regression", first_mapping="identity", **override)
@@ -351,7 +363,7 @@ def test_regression_rejects_options_ignored_by_its_target_family(override):
 
 @pytest.mark.parametrize("progression", ["classes", "transfer"])
 @pytest.mark.parametrize("override", [dict(arrival_order="class_ordered"), dict(arrival_order="mixed"), dict(uniform_fraction=0.5)])
-def test_only_example_progression_accepts_example_arrival_options(progression, override):
+def test_only_example_progression_accepts_example_arrival_options(progression: str, override: dict[str, Any]) -> None:
     with pytest.raises(ValueError, match="require progression=examples"):
         ClassIncrementalConfig(dataset="toy", stage_sizes=[1, 2], task_samples="pool", chunk_size="task",
                                progression=progression, target_dataset="other" if progression == "transfer" else None, **override)
@@ -360,13 +372,13 @@ def test_only_example_progression_accepts_example_arrival_options(progression, o
 @pytest.mark.parametrize("override", [dict(target_data_options={"download": False}), dict(alpha_values=[None, [0, 1]]),
                                       dict(transition_gamma=0.9), dict(uniform_fraction=0.5),
                                       dict(transition=["exponential", "abrupt"], transition_gamma=0.9)])
-def test_incremental_rejects_inactive_target_and_mixture_options(override):
+def test_incremental_rejects_inactive_target_and_mixture_options(override: dict[str, Any]) -> None:
     with pytest.raises(ValueError):
         ClassIncrementalConfig(dataset="toy", stage_sizes=[0.5, 1.0], task_samples="pool", chunk_size="task",
                                progression="examples", **override)
 
 
-def test_first_stage_is_unmixed_and_explicit_alpha_entries_are_scoped():
+def test_first_stage_is_unmixed_and_explicit_alpha_entries_are_scoped() -> None:
     common = dict(dataset="toy", stage_sizes=[0.5, 1.0], task_samples=12, chunk_size=4, progression="examples",
                   sampling="with_replacement", transition_chunks=3)
     ClassIncrementalConfig(**common, transition="exponential", transition_gamma=0.9)

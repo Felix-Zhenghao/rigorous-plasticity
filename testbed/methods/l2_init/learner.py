@@ -1,12 +1,20 @@
-from torch import nn
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
+
+from torch import Tensor, nn
 
 from testbed.core.losses import supervised_loss
 from testbed.core.optim import set_learning_rate
-from testbed.core.types import StepResult
+from testbed.core.types import Batch, StepResult
 from testbed.methods.backprop.learner import BackpropLearner
+from testbed.models import Network
+
+from .config import L2InitConfig
 
 
-def select_parameters(network, config):
+def select_parameters(network: Network, config: L2InitConfig) -> dict[str, nn.Parameter]:
     selected = {}
     modules = dict(network.named_modules())
     scope = config.parameter_scope
@@ -35,21 +43,21 @@ def select_parameters(network, config):
 
 
 class L2InitLearner(BackpropLearner):
-    def __init__(self, *, config, **kwargs):
+    def __init__(self, *, config: L2InitConfig, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.config = config
         self.selected = select_parameters(self.network, config)
         self.selected_parameters = list(self.selected)
         self.anchors = {name: parameter.detach().clone() for name, parameter in self.selected.items()}
 
-    def penalty(self):
+    def penalty(self) -> Tensor:
         return self.config.coefficient * 0.5 * sum((p - self.anchors[name]).square().sum() for name, p in self.selected.items())
 
     @property
-    def cost_metrics(self):
+    def cost_metrics(self) -> dict[str, int]:
         return super().cost_metrics | {"frozen_state_bytes": sum(value.numel() * value.element_size() for value in self.anchors.values())}
 
-    def train_step(self, batch):
+    def train_step(self, batch: Batch) -> StepResult:
         x, targets, _ = batch
         with self.rng:
             lr = set_learning_rate(self.optimizer, self.optimizer_config, self.lr_schedule, self.completed_updates)
@@ -65,12 +73,12 @@ class L2InitLearner(BackpropLearner):
             self.completed_updates += 1
         return StepResult(predictions.detach(), loss.detach(), extra.detach(), {"lr": lr})
 
-    def state_dict(self):
+    def state_dict(self) -> dict[str, Any]:
         state = super().state_dict()
         state["l2_init"] = {name: value.clone() for name, value in self.anchors.items()}
         return state
 
-    def load_state_dict(self, state):
+    def load_state_dict(self, state: Mapping[str, Any]) -> None:
         if state["l2_init"].keys() != self.anchors.keys():
             raise ValueError("L2 Init anchor names differ")
         super().load_state_dict(state)

@@ -1,23 +1,32 @@
+from __future__ import annotations
+
 from types import SimpleNamespace
+from typing import TYPE_CHECKING, cast
 
 import torch
-from torch import nn
+from torch import Tensor, nn
 
+from .config import ViTConfig
 from .layers import HiddenLayer, layer_norm
+
+if TYPE_CHECKING:
+    from testbed.core.types import ProblemSpec
+
+    from .initialization import InitializationRule
 
 
 class Attention(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config: ViTConfig) -> None:
         super().__init__()
         self.num_heads = config.num_heads
-        self.head_dim = config.head_dim
+        self.head_dim = cast(int, config.head_dim)
         self.q = nn.Linear(config.embed_dim, config.embed_dim, bias=False)
         self.k = nn.Linear(config.embed_dim, config.embed_dim, bias=False)
         self.v = nn.Linear(config.embed_dim, config.embed_dim, bias=False)
         self.out = nn.Linear(config.embed_dim, config.embed_dim)
         self.dropout = nn.Dropout(config.attention_dropout)
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         batch, tokens, _ = x.shape
         q, k, v = [layer(x).reshape(batch, tokens, self.num_heads, self.head_dim).transpose(1, 2)
                    for layer in (self.q, self.k, self.v)]
@@ -27,7 +36,7 @@ class Attention(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config: ViTConfig) -> None:
         super().__init__()
         self.norm1 = layer_norm(config.embed_dim, config)
         self.attention = Attention(config)
@@ -37,14 +46,18 @@ class TransformerBlock(nn.Module):
         self.fc2 = nn.Linear(config.mlp_dim, config.embed_dim)
         self.dropout = nn.Dropout(config.feedforward_dropout)
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         x = x + self.attention(self.norm1(x))
         hidden = self.dropout(self.activation(self.fc1(self.norm2(x))))
         return x + self.dropout(self.fc2(hidden))
 
 
 class ViT(nn.Module):
-    def __init__(self, problem, config):
+    initialization_rules: dict[str, InitializationRule]
+    resolved_config: dict[str, object]
+    architecture: str
+
+    def __init__(self, problem: ProblemSpec, config: ViTConfig) -> None:
         super().__init__()
         if len(problem.input_shape) != 3:
             raise ValueError("ViT requires CHW inputs")
@@ -80,7 +93,7 @@ class ViT(nn.Module):
         self.head_input_dim = width
         self.head = nn.Linear(width, len(problem.output_ids), bias=config.head_bias)
 
-    def embed_tokens(self, x):
+    def embed_tokens(self, x: Tensor) -> Tensor:
         if self.patch_embedding == "conv":
             x = self.patch_embed(x).flatten(2).transpose(1, 2)
         else:
@@ -93,7 +106,7 @@ class ViT(nn.Module):
         x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1)
         return self.embedding_dropout(x + self.pos_embedding)
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         x = self.embed_tokens(x)
         for block in self.blocks:
             x = block(x)
@@ -104,5 +117,5 @@ class ViT(nn.Module):
         return self.head(x)
 
 
-def build(problem, config):
+def build(problem: ProblemSpec, config: ViTConfig) -> ViT:
     return ViT(problem, config)

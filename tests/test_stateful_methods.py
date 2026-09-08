@@ -1,6 +1,9 @@
 """State semantics and small source-operation traces for maintenance methods."""
+from __future__ import annotations
+
 import math
 from copy import deepcopy
+from typing import Any
 
 import numpy as np
 import pytest
@@ -8,8 +11,10 @@ import torch
 from torch import nn
 
 from testbed.core.factory import METHOD_ARCHITECTURES, make_model
-from testbed.core.types import ProblemSpec
+from testbed.core.types import Batch, ProblemSpec
+from testbed.methods.backprop.learner import BackpropLearner
 from testbed.methods.fire.learner import newton_schulz
+from testbed.methods.optimizer_reset.learner import OptimizerResetLearner
 
 CONFIGS = {
     "c_chain": {"buffer_size": 8, "reference_batch_size": 3},
@@ -29,7 +34,16 @@ MODELS = {
 }
 
 
-def learner(method, architecture="mlp", *, config=None, model=None, loss="cross_entropy", optimizer=None, **kwargs):
+def learner(
+    method: str,
+    architecture: str = "mlp",
+    *,
+    config: dict[str, Any] | None = None,
+    model: dict[str, Any] | None = None,
+    loss: str = "cross_entropy",
+    optimizer: dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> BackpropLearner | OptimizerResetLearner:
     shape = (4,) if architecture == "mlp" else (3, 8, 8)
     problem = ProblemSpec(shape, loss, (0, 1) if loss == "cross_entropy" else (0,))
     return make_model(method, architecture, problem=problem, model_config=model or MODELS[architecture],
@@ -38,13 +52,13 @@ def learner(method, architecture="mlp", *, config=None, model=None, loss="cross_
                       seed=19, method_seed=37, **kwargs)
 
 
-def batch(architecture="mlp", index=0):
+def batch(architecture: str = "mlp", index: int = 0) -> Batch:
     generator = torch.Generator().manual_seed(index + 101)
     shape = (4,) if architecture == "mlp" else (3, 8, 8)
     return torch.randn(2, *shape, generator=generator), torch.tensor([0, 1]), torch.arange(2) + 2 * index
 
 
-def assert_equal(left, right):
+def assert_equal(left: object, right: object) -> None:
     if torch.is_tensor(left):
         torch.testing.assert_close(left, right, rtol=0, atol=0)
     elif isinstance(left, np.ndarray):
@@ -62,7 +76,7 @@ def assert_equal(left, right):
 
 
 @pytest.mark.parametrize("method,architecture", [(m, a) for m in CONFIGS for a in METHOD_ARCHITECTURES[m]])
-def test_resume_and_prediction_are_exact(method, architecture):
+def test_resume_and_prediction_are_exact(method: str, architecture: str) -> None:
     aged = learner(method, architecture)
     aged.train_step(batch(architecture, 0))
     aged.train_step(batch(architecture, 1))
@@ -80,7 +94,7 @@ def test_resume_and_prediction_are_exact(method, architecture):
     assert_equal(aged.state_dict(), restored.state_dict())
 
 
-def test_fire_matches_author_three_iteration_trace_and_handles_zero():
+def test_fire_matches_author_three_iteration_trace_and_handles_zero() -> None:
     # FIRE 3f73d78, vision/interventions/fire.py:newton_schulz, FP32 output.
     matrix = torch.tensor([[1., 2.], [3., 4.], [5., 6.]])
     expected = torch.tensor([[0.0172563195, 0.2792161107], [0.2910345197, 0.4387994409],
@@ -95,7 +109,7 @@ def test_fire_matches_author_three_iteration_trace_and_handles_zero():
     assert (projected.T @ projected - torch.eye(2)).norm() < (matrix.T @ matrix - torch.eye(2)).norm()
 
 
-def test_fire_spatial_slices_scaling_and_vit_qk_scope():
+def test_fire_spatial_slices_scaling_and_vit_qk_scope() -> None:
     conv = learner("fire", "resnet_18", config={"every_updates": 1, "iterations": 3})
     weight = conv.network.stem_conv.weight
     before = weight.detach().clone()
@@ -115,7 +129,7 @@ def test_fire_spatial_slices_scaling_and_vit_qk_scope():
     assert set(vit.selected_weights) == {"blocks.0.attention.q.weight", "blocks.0.attention.k.weight"}
 
 
-def test_nap_radii_affine_decay_and_architecture():
+def test_nap_radii_affine_decay_and_architecture() -> None:
     model = learner("nap", model={"hidden_sizes": [4], "ln_gain": "residual"},
                     config={"affine_decay": 0.25, "at_updates": [2]})
     assert model.config.every_updates is None
@@ -136,7 +150,7 @@ def test_nap_radii_affine_decay_and_architecture():
     assert all(isinstance(block.sum_norm, nn.LayerNorm) for stage in residual.network.stages for block in stage)
 
 
-def test_nap_joint_projection_uses_width_and_skips_zero():
+def test_nap_joint_projection_uses_width_and_skips_zero() -> None:
     model = learner("nap", model={"hidden_sizes": [4]}, config={"affine_policy": "joint_project"})
     norm = model.network.hidden[0].norm
     with torch.no_grad():
@@ -150,7 +164,7 @@ def test_nap_joint_projection_uses_width_and_skips_zero():
         learner("nap", model={"hidden_sizes": [4], "activation": "gelu"}, config={"affine_policy": "joint_project"})
 
 
-def test_shrink_perturb_saved_blend_and_absolute_timing():
+def test_shrink_perturb_saved_blend_and_absolute_timing() -> None:
     config = {"at_updates": [4], "retain": 0.75, "noise_scale": 0.25, "noise_source": "saved_init"}
     model = learner("shrink_perturb", config=config, start_update=3,
                     optimizer={"name": "sgd", "lr": 0.0}, model={"hidden_sizes": [4]})
@@ -167,7 +181,7 @@ def test_shrink_perturb_saved_blend_and_absolute_timing():
     assert model.train_step(batch(index=1)).metrics["intervention"] == 0
 
 
-def test_swr_scores_post_optimizer_weights_with_retained_gradients():
+def test_swr_scores_post_optimizer_weights_with_retained_gradients() -> None:
     model = learner("swr", loss="mse", model={"hidden_sizes": [], "head_bias": False},
                     config={"every_updates": 1, "utility": "gradient", "fraction": 0.25, "replacement": "init_mean"},
                     optimizer={"name": "sgd", "lr": 1.0})
@@ -182,7 +196,7 @@ def test_swr_scores_post_optimizer_weights_with_retained_gradients():
 
 
 @pytest.mark.parametrize("gain,expected", [("standard", 1.0), ("residual", 0.0)])
-def test_swr_initializer_mean_includes_norm_and_clears_whole_ema(gain, expected):
+def test_swr_initializer_mean_includes_norm_and_clears_whole_ema(gain: str, expected: float) -> None:
     model = learner("swr", model={"hidden_sizes": [4], "norm": "layer", "ln_gain": gain},
                     config={"every_updates": 1, "fraction": 1., "replacement": "init_mean", "ema_decay": .5})
     with torch.no_grad():
@@ -192,7 +206,7 @@ def test_swr_initializer_mean_includes_norm_and_clears_whole_ema(gain, expected)
     assert all(utility.count_nonzero() == 0 for utility in model.utilities.values())
 
 
-def test_cbp_maturity_and_fractional_accumulation():
+def test_cbp_maturity_and_fractional_accumulation() -> None:
     model = learner("cbp", model={"hidden_sizes": [2]}, config={"maturity_updates": 1,
                     "replacement_rate": .25, "ema_decay": .5})
     features = {"hidden.0": torch.tensor([[1., 4.], [1., 4.]])}
@@ -209,7 +223,7 @@ def test_cbp_maturity_and_fractional_accumulation():
 
 
 @pytest.mark.parametrize("method", ["cbp", "redo"])
-def test_overlapping_recycling_masks_clear_only_affected_moments(method):
+def test_overlapping_recycling_masks_clear_only_affected_moments(method: str) -> None:
     model = learner(method, model={"hidden_sizes": [3, 3], "norm": "layer", "ln_gain": "residual"})
     for parameter in model.parameters:
         parameter.grad = torch.ones_like(parameter)
@@ -228,7 +242,7 @@ def test_overlapping_recycling_masks_clear_only_affected_moments(method):
     assert model.network.hidden[0].norm.weight[1] == 0
 
 
-def test_redo_all_zero_scores_and_bounded_sample_weighted_window():
+def test_redo_all_zero_scores_and_bounded_sample_weighted_window() -> None:
     model = learner("redo", model={"hidden_sizes": [2]}, config={"every_updates": 1, "threshold": 0.,
                     "statistics_window_updates": 2, "reset_source": "saved_init"})
     assert model.update_statistics({"hidden.0": torch.zeros(1, 2)}, True) == 2
@@ -237,7 +251,7 @@ def test_redo_all_zero_scores_and_bounded_sample_weighted_window():
     assert len(model.windows["hidden.0"]) == 2
 
 
-def test_redo_resnet_batchnorm_channels_and_counter():
+def test_redo_resnet_batchnorm_channels_and_counter() -> None:
     model = learner("redo", "resnet_18")
     incoming, norm, outgoing = model.sites["stages.0.0.conv1"]
     with torch.no_grad():
@@ -251,7 +265,7 @@ def test_redo_resnet_batchnorm_channels_and_counter():
     assert outgoing.weight[:, 0].count_nonzero() == 0
 
 
-def test_chain_lag_disjoint_lru_and_nonzero_matching_gradient():
+def test_chain_lag_disjoint_lru_and_nonzero_matching_gradient() -> None:
     model = learner("c_chain", model={"hidden_sizes": []}, loss="mse",
                     config={"buffer_size": 2, "reference_batch_size": 2})
     first = (torch.ones(1, 4), torch.ones(1, 1), torch.tensor([10]))
@@ -270,12 +284,12 @@ def test_chain_lag_disjoint_lru_and_nonzero_matching_gradient():
     assert len(model.history) == 2
 
 
-def test_chain_one_optimizer_step_and_later_coefficient_adaptation():
+def test_chain_one_optimizer_step_and_later_coefficient_adaptation() -> None:
     model = learner("c_chain", config={"buffer_size": 8, "reference_batch_size": 3,
                     "coefficient_mode": "loss_ratio", "adapt_after_updates": 1, "coefficient": .2})
     count = 0
     original = model.optimizer.step
-    def step():
+    def step() -> torch.Tensor | float | None:
         nonlocal count
         count += 1
         return original()
@@ -290,7 +304,7 @@ def test_chain_one_optimizer_step_and_later_coefficient_adaptation():
     assert next_coefficient != .2
 
 
-def test_optimizer_reset_composition_preserves_anchors_and_parameter_objects():
+def test_optimizer_reset_composition_preserves_anchors_and_parameter_objects() -> None:
     model = learner("optimizer_reset", config={"at_updates": [2], "base_method": "l2_init",
                     "base_config": {"coefficient": .1}})
     identities = [id(p) for p in model.parameters]
@@ -307,7 +321,7 @@ def test_optimizer_reset_composition_preserves_anchors_and_parameter_objects():
 
 
 @pytest.mark.parametrize("method", ["fire", "redo", "swr", "shrink_perturb", "optimizer_reset"])
-def test_interventions_reject_missing_ambiguous_or_nonpositive_schedule(method):
+def test_interventions_reject_missing_ambiguous_or_nonpositive_schedule(method: str) -> None:
     for config in ({}, {"every_updates": 0}, {"at_updates": [0]}, {"at_updates": [2, 1]},
                    {"every_updates": 2, "at_updates": [2]}):
         with pytest.raises(ValueError):
@@ -319,7 +333,7 @@ def test_interventions_reject_missing_ambiguous_or_nonpositive_schedule(method):
     ("swr", {"every_updates": 1, "fraction": 0.}),
     ("cbp", {"replacement_rate": 0.}),
 ])
-def test_disabled_replacements_preserve_backprop_dropout_trace(method, config):
+def test_disabled_replacements_preserve_backprop_dropout_trace(method: str, config: dict[str, Any]) -> None:
     control = make_model("backprop", "mlp", problem=ProblemSpec((4,), "cross_entropy", (0, 1)),
         model_config=MODELS["mlp"], optimizer_config={"name": "adam", "lr": .002, "amsgrad": True},
         seed=19, method_seed=37)

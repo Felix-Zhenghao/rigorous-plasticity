@@ -1,3 +1,4 @@
+# Field meanings and allowed values: docs/configuration.md.
 # P17's EMNIST task cadence; replacement, architecture, and optimizer are explicit testbed choices.
 paradigm: class_remap
 data:

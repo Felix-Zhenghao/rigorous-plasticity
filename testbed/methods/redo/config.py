@@ -1,9 +1,43 @@
+from __future__ import annotations
+
 import math
 from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
 class ReDoConfig:
+    """Recycle units whose activity is small relative to their layer average.
+
+    MLP sites are all hidden/head_hidden layers; ResNet sites are the first
+    convolution in each residual block; ViT sites are feedforward fc1 units.
+    Replacements zero outgoing weights and reset normalization parameters
+    and the selected units' BatchNorm running statistics.
+
+    threshold: Finite nonnegative cutoff: recycle when mean(abs(feature)) /
+        (layer_mean_activity + eps) <= threshold. A larger value replaces
+        more units; zero selects only exactly inactive units.
+    reset_source: "fresh_init" resamples incoming weights using their original
+        initialization rule and zeros incoming biases. "saved_init" restores
+        each selected unit's saved initial weights and biases.
+    statistics_window_updates: Positive number of recent training batches
+        used to estimate activity, weighted by the number of feature values.
+        One uses the latest batch; the rolling window continues across resets.
+    statistic_site: "after_activation" measures activated units; "after_norm"
+        measures normalization outputs, before or after activation according
+        to model placement. ViT supports only "after_activation".
+    optimizer_state: "keep" preserves optimizer history; "clear_moments"
+        zeros parameter-shaped optimizer state only at modified entries,
+        preserving step counters; "reset_all" discards all optimizer state.
+        "reset_all" runs only when at least one unit is replaced.
+    eps: Finite positive offset in the layer-mean activity denominator.
+    at_updates: Sorted, distinct positive completed-update numbers at which
+        to intervene, after the optimizer step. Use () with every_updates;
+        otherwise set every_updates=None and provide at least one number.
+    every_updates: Intervene after every N completed optimizer updates (N > 0),
+        counting from the start of the run and across resumes. None disables
+        the periodic schedule; exactly one schedule must be configured.
+    """
+
     threshold: float = 0.1
     reset_source: str = "fresh_init"
     statistics_window_updates: int = 1
@@ -13,7 +47,7 @@ class ReDoConfig:
     at_updates: tuple[int, ...] = ()
     every_updates: int | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if any(not math.isfinite(getattr(self, key)) for key in ('threshold', 'eps')):
             raise ValueError("method numeric parameters must be finite")
         if self.threshold < 0 or self.eps <= 0:

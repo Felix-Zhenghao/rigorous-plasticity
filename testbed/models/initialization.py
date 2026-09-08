@@ -1,12 +1,38 @@
 """Save sampling rules using the original layer fans, including for sliced resets."""
+from __future__ import annotations
+
+from collections.abc import Sequence
 from math import sqrt
+from typing import TYPE_CHECKING, Literal, TypedDict
 
 import torch
-from torch import nn
+from torch import Tensor, nn
+
+from .config import ModelConfig
+
+if TYPE_CHECKING:
+    from . import Network
 
 
-def initialize(network, config):
-    rules = {}
+class _RequiredInitializationRule(TypedDict):
+    distribution: Literal["constant", "uniform", "normal"]
+    mean: float
+
+
+class InitializationRule(_RequiredInitializationRule, total=False):
+    """Saved sampling metadata; distribution selects which optional keys exist."""
+
+    low: float
+    high: float
+    std: float
+    fan_in: int
+    fan_out: int
+    shape: list[int]
+
+
+def initialize(network: Network, config: ModelConfig) -> None:
+    rules: dict[str, InitializationRule] = {}
+    rule: InitializationRule
     for module_name, module in network.named_modules():
         for local_name, parameter in module.named_parameters(recurse=False):
             name = f"{module_name}.{local_name}" if module_name else local_name
@@ -40,7 +66,13 @@ def initialize(network, config):
             parameter.copy_(sample_initial(network, name))
 
 
-def sample_initial(network, name, shape=None, generator=None, device=None):
+def sample_initial(
+    network: Network,
+    name: str,
+    shape: Sequence[int] | None = None,
+    generator: torch.Generator | None = None,
+    device: str | torch.device | None = None,
+) -> Tensor:
     parameter = network.get_parameter(name)
     rule = network.initialization_rules[name]
     target_device = parameter.device if device is None else torch.device(device)
@@ -56,5 +88,5 @@ def sample_initial(network, name, shape=None, generator=None, device=None):
     return values.to(target_device)
 
 
-def initial_mean(network, name):
+def initial_mean(network: Network, name: str) -> float:
     return network.initialization_rules[name]["mean"]

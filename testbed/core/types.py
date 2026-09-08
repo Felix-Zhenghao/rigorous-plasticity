@@ -1,6 +1,8 @@
 """The entire boundary between data generation, consumption, and learning."""
+from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, ClassVar, Protocol
 
 from torch import Tensor, nn
 from torch.optim import Optimizer
@@ -9,13 +11,28 @@ from torch.utils.data import Dataset
 Batch = tuple[Tensor, Tensor, Tensor]
 
 
+class DataclassInstance(Protocol):
+    """Structural type for configuration objects accepted by dataclass helpers."""
+
+    __dataclass_fields__: ClassVar[dict[str, Any]]
+
+
 @dataclass(frozen=True)
 class ProblemSpec:
+    """Fixed prediction contract shared by data, models, and losses.
+
+    input_shape: Per-example tensor dimensions, excluding the batch dimension.
+    loss_kind: "cross_entropy" uses class IDs and logits; "mse" uses floating
+        targets with exactly the same shape as predictions (no broadcasting).
+    output_ids: Ordered, distinct output labels. Their count sets the output
+        width; classification maps each label to its position in this tuple.
+    """
+
     input_shape: tuple[int, ...]
     loss_kind: str
     output_ids: tuple[int, ...]
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         object.__setattr__(self, "input_shape", tuple(self.input_shape))
         object.__setattr__(self, "output_ids", tuple(self.output_ids))
         if not self.input_shape or any(n <= 0 for n in self.input_shape):
@@ -26,18 +43,29 @@ class ProblemSpec:
             raise ValueError("output_ids must be nonempty and unique")
 
     @property
-    def output_dim(self):
+    def output_dim(self) -> int:
         return len(self.output_ids)
 
 
 @dataclass(frozen=True)
 class Consumption:
+    """How to consume one data block; budgets apply independently to each chunk.
+
+    chunk_size: Maximum arriving examples made available together. The final
+        chunk may be smaller; minibatches never cross chunk boundaries.
+    epochs: Complete passes per chunk. Set to None to use an update budget.
+    updates: Optimizer steps per chunk; requires epochs=None. Short passes
+        restart until this budget is reached. Set exactly one budget.
+    shuffle_each_epoch: Shuffle positions independently at each pass; False
+        preserves the arrival order on every pass.
+    """
+
     chunk_size: int
     epochs: int | None = 1
     updates: int | None = None
     shuffle_each_epoch: bool = True
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if not isinstance(self.chunk_size, int) or self.chunk_size < 1:
             raise ValueError("chunk_size must be a positive integer")
         if (self.epochs is None) == (self.updates is None):
@@ -49,7 +77,7 @@ class Consumption:
 
 @dataclass(frozen=True)
 class DataBlock:
-    data: Dataset
+    data: Dataset[Any]
     consume: Consumption
 
 
@@ -65,17 +93,21 @@ class Paradigm(Protocol):
     problem: ProblemSpec
 
     def get_data(self) -> DataBlock | None: ...
-    def get_eval_data(self, split: str) -> Dataset: ...
-    def state_dict(self) -> dict: ...
-    def load_state_dict(self, state: dict) -> None: ...
+    def get_eval_data(self, split: str) -> Dataset[Any]: ...
+    def state_dict(self) -> dict[str, Any]: ...
+    def load_state_dict(self, state: dict[str, Any]) -> None: ...
 
 
 class Learner(Protocol):
     network: nn.Module
     optimizer: Optimizer
     completed_updates: int
+    optimizer_config: dict[str, Any]
+    lr_schedule: dict[str, Any]
+    resolved_model_config: dict[str, Any]
+    resolved_method_config: dict[str, Any]
 
     def train_step(self, batch: Batch) -> StepResult: ...
     def predict(self, x: Tensor) -> Tensor: ...
-    def state_dict(self) -> dict: ...
-    def load_state_dict(self, state: dict) -> None: ...
+    def state_dict(self) -> dict[str, Any]: ...
+    def load_state_dict(self, state: dict[str, Any]) -> None: ...

@@ -1,3 +1,4 @@
+# Field meanings and allowed values: docs/configuration.md.
 # S12 with a fixed full output head and continuous optimizer/LR state: an adaptation of P09/P13.
 paradigm: class_incremental
 data:

@@ -1,9 +1,21 @@
-from testbed.core.factory import make_network
+from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+from typing import Any
+
+import torch
+from torch import Tensor
+
+from testbed.core.factory import make_network
+from testbed.core.types import ProblemSpec
+from testbed.models.config import ResNet18Config
+from testbed.models.resnet_18 import ResNet18
+
+from .config import FeatureNormConfig
 from .learner import FeatureNormLearner
 
 
-def forward_features(network, x, sites):
+def forward_features(network: ResNet18, x: Tensor, sites: Sequence[str]) -> tuple[Tensor, dict[str, Tensor]]:
     features = {}
     x = network.stem_pool(network.stem_activation(network.stem_norm(network.stem_conv(x))))
     if "stem" in sites:
@@ -32,7 +44,16 @@ def forward_features(network, x, sites):
     return network.head(x), features
 
 
-def build(*, problem, model_config, method_config, device="cpu", seed=0, method_seed=None, **kwargs):
+def build(
+    *,
+    problem: ProblemSpec,
+    model_config: ResNet18Config | Mapping[str, Any],
+    method_config: FeatureNormConfig,
+    device: str | torch.device = "cpu",
+    seed: int = 0,
+    method_seed: int | None = None,
+    **kwargs: Any,
+) -> FeatureNormLearner:
     network = make_network("resnet_18", problem=problem, model_config=model_config, device=device, seed=seed)
     available = {"head_input", "pooled", "stem"} | {f"head_hidden.{i}" for i in range(len(network.head_hidden))} | {f"stages.{s}.{b}.activation{a}" for s, stage in enumerate(network.stages) for b in range(len(stage)) for a in (1, 2)}
     if not set(method_config.feature_sites) <= available:

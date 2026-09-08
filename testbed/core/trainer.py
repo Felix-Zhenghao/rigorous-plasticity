@@ -1,4 +1,6 @@
 """Shared orchestration; only learners perform optimization or maintenance."""
+from __future__ import annotations
+
 import hashlib
 import importlib.metadata
 import json
@@ -7,21 +9,34 @@ import time
 from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from .checkpoint import SeenInputBank, atomic_save, build_learner, load_checkpoint, restore_run, snapshot
 from .config import RunConfig, load_yaml, plain, save_yaml, strict_dataclass
 from .consumption import Consumer
 from .metrics import Recorder, Score, evaluate, write_json
 from .random import isolated_rng, seed_all
+from .types import Learner
+
+if TYPE_CHECKING:
+    from testbed.data.datasets import DatasetInput
 
 
-def _matches_saved(given, saved):
+def _matches_saved(given: Any, saved: Any) -> bool:
     if isinstance(given, dict) and isinstance(saved, dict):
         return all(key in saved and _matches_saved(value, saved[key]) for key, value in given.items())
     return plain(given) == plain(saved)
 
 
-def training_window(config, learner, consumer, updates, *, output_path, datasets=None):
+def training_window(
+    config: RunConfig,
+    learner: Learner,
+    consumer: Consumer,
+    updates: int,
+    *,
+    output_path: str | Path,
+    datasets: DatasetInput = None,
+) -> dict[str, Any]:
     from testbed.training import make_paradigm
     start = learner.completed_updates
     with isolated_rng():
@@ -54,7 +69,13 @@ def training_window(config, learner, consumer, updates, *, output_path, datasets
         return result
 
 
-def train(config=None, *, resume=None, datasets=None, stop_after_updates=None):
+def train(
+    config: RunConfig | dict[str, Any] | None = None,
+    *,
+    resume: str | Path | dict[str, Any] | None = None,
+    datasets: DatasetInput = None,
+    stop_after_updates: int | None = None,
+) -> dict[str, Any]:
     from testbed.training import make_paradigm
     if resume is not None:
         saved = load_checkpoint(resume) if isinstance(resume, (str, Path)) else resume
@@ -121,14 +142,14 @@ def train(config=None, *, resume=None, datasets=None, stop_after_updates=None):
     start_time = time.perf_counter()
     bank_path = output / "artifacts" / "seen_inputs.pt"
 
-    def save(name):
+    def save(name: str) -> tuple[dict[str, Any], Path]:
         state = snapshot(config, learner, consumer, bank, bank_path=bank_path,
                          recorder_state=recorder.state_dict(), report_state=report_state)
         path = output / "checkpoints" / f"{name}.pt"
         atomic_save(state, path)
         return state, path
 
-    def report(*, final=False):
+    def report(*, final: bool = False) -> None:
         update = learner.completed_updates
         interval = config.trainer.eval_every_updates
         due = update == 0 or final or (interval is not None and update % interval == 0)

@@ -1,9 +1,13 @@
+from __future__ import annotations
+
 from copy import deepcopy
+from pathlib import Path
+from typing import Any
 
 import torch
 
 from testbed.core.types import Consumption, DataBlock, ProblemSpec
-from testbed.data.datasets import load_dataset, prepare_data
+from testbed.data.datasets import DatasetInput, PreparedSplit, load_dataset, prepare_data
 from testbed.data.sampling import probabilities, realized_proportions, sample_indices, scheduled
 
 from .config import ClassRemapConfig
@@ -11,7 +15,10 @@ from .data import FixedRegressionData, RemappedData, draw_base_targets
 
 
 class ClassRemap:
-    def __init__(self, config, *, data_root="data", seed=0, datasets=None):
+    def __init__(
+        self, config: ClassRemapConfig | dict[str, Any], *, data_root: str | Path = "data",
+        seed: int = 0, datasets: DatasetInput = None,
+    ) -> None:
         self.config = config if isinstance(config, ClassRemapConfig) else ClassRemapConfig(**config)
         config = self.config
         self.seed = seed
@@ -33,15 +40,15 @@ class ClassRemap:
         for i in range(config.num_tasks):
             probabilities(config.class_probs, i, config.num_tasks, self.output_ids)
 
-    def _rng(self, purpose, index=0):
+    def _rng(self, purpose: int, index: int = 0) -> torch.Generator:
         return torch.Generator().manual_seed((self.seed + purpose * 1000003 + index * 9176) % (2**63 - 1))
 
-    def _select_pool(self, index):
+    def _select_pool(self, index: int) -> torch.Tensor:
         size = len(self.splits["train"])
         requested = self.config.pool_size or size
         return torch.randperm(size, generator=self._rng(1, index))[:min(requested, size)]
 
-    def _mapping(self, index):
+    def _mapping(self, index: int) -> dict[int, int]:
         eligible = [label for label in self.output_ids if label not in self.config.stable_classes]
         mapping = {label: label for label in self.output_ids}
         if index != 0 or self.config.first_mapping != "identity":
@@ -49,7 +56,7 @@ class ClassRemap:
             mapping.update({label: eligible[j] for label, j in zip(eligible, order)})
         return mapping
 
-    def _regression_artifact(self):
+    def _regression_artifact(self) -> dict[str, Any]:
         config = self.config
         count = scheduled(config.task_samples, 0, 1, "task_samples")
         count = len(self.pool) if count == "pool" else count
@@ -69,7 +76,7 @@ class ClassRemap:
                 "targets": config.target_mean + residuals, "target_mean": config.target_mean,
                 "generator": generator, "centering_mean": center}
 
-    def get_data(self):
+    def get_data(self) -> DataBlock | None:
         config, index = self.config, self.next_task
         if index >= config.num_tasks:
             return None
@@ -95,12 +102,12 @@ class ClassRemap:
                                        "changed_fraction": sum(c != y for c, y in mapping.items()) / len(mapping)})
         return DataBlock(data, consume)
 
-    def get_unseen_data(self, split):
+    def get_unseen_data(self, split: str) -> PreparedSplit:
         if split not in {"val", "test"}:
             raise ValueError("Held-out split must be val or test")
         return self.splits[split]
 
-    def get_eval_data(self, split):
+    def get_eval_data(self, split: str) -> RemappedData | FixedRegressionData:
         source = self.get_unseen_data(split)
         if self.fixed_regression is None:
             return RemappedData(source, torch.arange(len(source)), self.mappings[self.active_task % len(self.mappings)])
@@ -113,13 +120,13 @@ class ClassRemap:
             self._fixed_eval[split] = FixedRegressionData(inputs, self.config.target_mean + residuals, source.ids)
         return self._fixed_eval[split]
 
-    def state_dict(self):
+    def state_dict(self) -> dict[str, Any]:
         return {"seed": self.seed, "next_task": self.next_task, "active_task": self.active_task,
                 "pool": self.pool, "mappings": self.mappings,
                 "metadata": {**self.metadata, "tasks": list(self.metadata["tasks"])},
                 "fixed_regression": self.fixed_regression}
 
-    def load_state_dict(self, state):
+    def load_state_dict(self, state: dict[str, Any]) -> None:
         if state.get("seed", self.seed) != self.seed:
             raise ValueError("The data seed differs from the saved run")
         if not 0 <= state["next_task"] <= self.config.num_tasks:

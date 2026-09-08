@@ -1,17 +1,23 @@
+from __future__ import annotations
+
+from collections.abc import Mapping
 from copy import deepcopy
+from typing import Any
 
 import torch
-from torch import nn
+from torch import Tensor, nn
 from torch.nn import functional as F
 
 from testbed.core.losses import supervised_loss
 from testbed.core.optim import set_learning_rate
-from testbed.core.types import StepResult
+from testbed.core.types import Batch, StepResult
 from testbed.methods.backprop.learner import BackpropLearner
+
+from .config import SpectralConfig
 
 
 class SpectralLearner(BackpropLearner):
-    def __init__(self, *, config, **kwargs):
+    def __init__(self, *, config: SpectralConfig, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.config = config
         self.matrices, self.vectors, self.gains = {}, {}, {}
@@ -54,18 +60,18 @@ class SpectralLearner(BackpropLearner):
                 v = F.normalize(torch.randn(matrix.shape[1], device=self.device), dim=0, eps=config.eps)
                 self.power_vectors[name] = (u, v)
 
-    def matrix(self, name):
+    def matrix(self, name: str) -> Tensor:
         parameter, role = self.matrices[name]
         if role == "embedding":
             parameter = parameter.squeeze()
         return parameter.reshape(parameter.shape[0], -1)
 
     @property
-    def cost_metrics(self):
+    def cost_metrics(self) -> dict[str, int]:
         size = sum(value.numel() * value.element_size() for vectors in self.power_vectors.values() for value in vectors)
         return super().cost_metrics | {"frozen_state_bytes": size}
 
-    def penalty(self, update_vectors=True):
+    def penalty(self, update_vectors: bool = True) -> Tensor:
         total = torch.zeros((), device=self.device)
         for name in self.matrices:
             matrix = self.matrix(name)
@@ -85,7 +91,7 @@ class SpectralLearner(BackpropLearner):
             total = total + (gain - 1).square().sum()
         return self.config.coefficient * total
 
-    def train_step(self, batch):
+    def train_step(self, batch: Batch) -> StepResult:
         x, targets, _ = batch
         with self.rng:
             lr = set_learning_rate(self.optimizer, self.optimizer_config, self.lr_schedule, self.completed_updates)
@@ -101,10 +107,10 @@ class SpectralLearner(BackpropLearner):
             self.completed_updates += 1
         return StepResult(predictions.detach(), loss.detach(), extra.detach(), {"lr": lr})
 
-    def state_dict(self):
+    def state_dict(self) -> dict[str, Any]:
         return super().state_dict() | {"spectral": deepcopy(self.power_vectors)}
 
-    def load_state_dict(self, state):
+    def load_state_dict(self, state: Mapping[str, Any]) -> None:
         if self.power_vectors.keys() != state["spectral"].keys():
             raise ValueError("spectral layer names differ")
         super().load_state_dict(state)

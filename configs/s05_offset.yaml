@@ -1,3 +1,4 @@
+# Field meanings and allowed values: docs/configuration.md.
 paradigm: offset_refit
 probe:
   target_offsets: [same, 0]

@@ -1,11 +1,35 @@
-from testbed.core.factory import make_network
+from __future__ import annotations
 
-from .config import CONFIG_CLASS
+from collections.abc import Mapping
+from typing import Any
+
+import torch
+from torch import Tensor
+
+from testbed.core.factory import make_network
+from testbed.core.optim import OptimizerConfig
+from testbed.core.types import ProblemSpec
+from testbed.methods._typing import RecyclingSite
+from testbed.models.config import ResNet18Config
+from testbed.models.resnet_18 import ResNet18
+
+from .config import CONFIG_CLASS, CBPConfig
 from .learner import CBPLearner
 
 
-def build(*, problem, model_config, method_config, optimizer_config, lr_schedule="constant",
-          grad_clip_norm=None, device="cpu", seed=0, start_update=0, method_seed=None):
+def build(
+    *,
+    problem: ProblemSpec,
+    model_config: ResNet18Config | Mapping[str, Any],
+    method_config: CBPConfig | Mapping[str, Any],
+    optimizer_config: OptimizerConfig | Mapping[str, Any],
+    lr_schedule: str | Mapping[str, Any] | None = "constant",
+    grad_clip_norm: float | None = None,
+    device: str | torch.device = "cpu",
+    seed: int = 0,
+    start_update: int = 0,
+    method_seed: int | None = None,
+) -> CBPLearner:
     config = method_config if isinstance(method_config, CONFIG_CLASS) else CONFIG_CLASS(**method_config)
     network = make_network("resnet_18", problem=problem, model_config=model_config, device=device, seed=seed)
     sites = bind_sites(network, config)
@@ -14,14 +38,14 @@ def build(*, problem, model_config, method_config, optimizer_config, lr_schedule
                          seed=seed if method_seed is None else method_seed, start_update=start_update)
 
 
-def bind_sites(network, config):
+def bind_sites(network: ResNet18, config: CBPConfig) -> dict[str, RecyclingSite]:
     if getattr(config, "bias_compensation", False):
         raise ValueError("ResNet recycling does not support bias compensation")
     return {f"stages.{i}.{j}.conv1": (block.conv1, block.norm1, block.conv2)
             for i, stage in enumerate(network.stages) for j, block in enumerate(stage)}
 
 
-def forward_features(network, x, statistic_site):
+def forward_features(network: ResNet18, x: Tensor, statistic_site: str) -> tuple[Tensor, dict[str, Tensor]]:
     features = {}
     x = network.stem_pool(network.stem_activation(network.stem_norm(network.stem_conv(x))))
     for i, stage in enumerate(network.stages):

@@ -1,3 +1,4 @@
+# Field meanings and allowed values: docs/configuration.md.
 # Repeated CIFAR-10 label remapping; fixed head and continuous clocks are testbed adaptations.
 # L2 Init uses P08's fixed anchors; this ResNet recipe is not a P08 architecture reproduction.
 paradigm: class_remap
@@ -23,11 +24,11 @@ model:
   initialization: kaiming_uniform
 method:
   name: l2_init
-  coefficient: 0.0001
-  parameter_scope: network
-  include_bias: true
-  include_norm_affine: false
-  include_embeddings: true
+  coefficient: 0.0001  # Added loss: (coefficient / 2) * sum((p - p_at_initialization)**2).
+  parameter_scope: network  # Whole model; "head" is the final output layer, "hidden" excludes it.
+  include_bias: true  # Include selected biases, subject to the normalization filter below.
+  include_norm_affine: false  # Exclude LayerNorm/BatchNorm learned gains and biases.
+  include_embeddings: true  # Include embeddings and other parameters outside linear/conv/norm layers.
 optimizer: {name: adam, lr: 0.001, weight_decay: 0}
 trainer:
   batch_size: 250

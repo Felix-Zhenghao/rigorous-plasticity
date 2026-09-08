@@ -1,19 +1,33 @@
+from __future__ import annotations
+
 import time
 from collections import deque
+from collections.abc import Callable, Mapping
 from copy import deepcopy
+from typing import Any
 
 import torch
-from torch import nn
+from torch import Tensor, nn
 
 from testbed.core.losses import supervised_loss
 from testbed.core.optim import set_learning_rate
-from testbed.core.types import StepResult
+from testbed.core.types import Batch, StepResult
+from testbed.methods._typing import RecyclingSite
 from testbed.methods.backprop.learner import BackpropLearner
 from testbed.models.initialization import sample_initial
 
+from .config import ReDoConfig
+
 
 class ReDoLearner(BackpropLearner):
-    def __init__(self, *, config, sites, feature_forward, **kwargs):
+    def __init__(
+        self,
+        *,
+        config: ReDoConfig,
+        sites: Mapping[str, RecyclingSite],
+        feature_forward: Callable[..., tuple[Tensor, dict[str, Tensor]]],
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
         self.config, self.sites, self.feature_forward = config, sites, feature_forward
         self.parameter_names = {id(p): name for name, p in self.network.named_parameters()}
@@ -27,7 +41,7 @@ class ReDoLearner(BackpropLearner):
                         self.anchors[self.parameter_names[id(parameter)]] = parameter.detach().clone()
 
     @torch.no_grad()
-    def update_statistics(self, features, due):
+    def update_statistics(self, features: Mapping[str, Tensor], due: bool) -> int:
         selections = {}
         for name, feature in features.items():
             axes = (0, *range(2, feature.ndim))
@@ -44,9 +58,9 @@ class ReDoLearner(BackpropLearner):
         return sum(indices.numel() for indices in selections.values())
 
     @torch.no_grad()
-    def replace_units(self, selections):
+    def replace_units(self, selections: Mapping[str, Tensor]) -> None:
         masks = {}
-        def mark(parameter, indices, axis=0):
+        def mark(parameter: nn.Parameter | None, indices: Tensor, axis: int = 0) -> None:
             if parameter is None:
                 return
             mask = masks.setdefault(parameter, torch.zeros_like(parameter, dtype=torch.bool))
@@ -97,7 +111,7 @@ class ReDoLearner(BackpropLearner):
         elif self.config.optimizer_state == "reset_all" and any(index.numel() for index in selections.values()):
             self.optimizer.state.clear()
 
-    def train_step(self, batch):
+    def train_step(self, batch: Batch) -> StepResult:
         with self.rng:
             x, targets, _ = batch
             lr = set_learning_rate(self.optimizer, self.optimizer_config, self.lr_schedule, self.completed_updates)
@@ -118,18 +132,18 @@ class ReDoLearner(BackpropLearner):
                               "maintenance_seconds": time.perf_counter() - started})
 
     @property
-    def cost_metrics(self):
+    def cost_metrics(self) -> dict[str, int]:
         metrics = super().cost_metrics
         metrics["frozen_state_bytes"] = sum(t.numel() * t.element_size() for t in self.anchors.values()) + sum(t.numel() * t.element_size() for window in self.windows.values() for t, _ in window)
         return metrics
 
-    def state_dict(self):
+    def state_dict(self) -> dict[str, Any]:
         state = super().state_dict()
         state["redo"] = deepcopy({"windows": {name: list(window) for name, window in self.windows.items()},
                                   "anchors": self.anchors, "sites": list(self.sites)})
         return state
 
-    def load_state_dict(self, state):
+    def load_state_dict(self, state: Mapping[str, Any]) -> None:
         saved = state["redo"]
         if saved["sites"] != list(self.sites):
             raise ValueError("ReDo sites differ from checkpoint")

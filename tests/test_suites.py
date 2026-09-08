@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import json
+from pathlib import Path
 
 import torch
 import yaml
@@ -9,7 +12,7 @@ from testbed.core.trainer import train
 from testbed.suite import run_suite
 
 
-def test_sequential_checkpoint_suite_matches_standalone_and_keeps_jobs(tmp_path):
+def test_sequential_checkpoint_suite_matches_standalone_and_keeps_jobs(tmp_path: Path) -> None:
     config = recipe(tmp_path / "source")
     train(config)
     probe = tmp_path / "probe.yaml"
@@ -26,7 +29,7 @@ def test_sequential_checkpoint_suite_matches_standalone_and_keeps_jobs(tmp_path)
     assert len(list((tmp_path / "suite").glob("**/fitting_data.pt"))) == len(before)
 
 
-def test_experiment_grid_aggregates_independent_seeds(tmp_path):
+def test_experiment_grid_aggregates_independent_seeds(tmp_path: Path) -> None:
     config = recipe(tmp_path / "unused")
     path = tmp_path / "recipe.yaml"
     path.write_text(yaml.safe_dump(config))
@@ -37,7 +40,7 @@ def test_experiment_grid_aggregates_independent_seeds(tmp_path):
     assert all(s["seeds"] == 2 and s["family"] == "class_remap" for s in summary)
 
 
-def test_target_size_branches_start_from_identical_source_state(tmp_path):
+def test_target_size_branches_start_from_identical_source_state(tmp_path: Path) -> None:
     config = recipe(tmp_path / "unused")
     config["paradigm"] = "class_incremental"
     config["data"] = dict(dataset="synthetic", target_dataset="synthetic", progression="transfer",

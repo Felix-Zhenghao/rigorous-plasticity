@@ -30,6 +30,8 @@ python run.py suite --config configs/supervised_suite.yaml
 
 Use dotted `--set key=value` overrides; values follow YAML syntax. A method switch may require its own parameters, for example `--set method.name=l2_init --set method.coefficient=0.0001`. Unknown fields and unsupported method–architecture pairs raise errors. Existing training outputs require resume or a new output directory.
 
+The [configuration guide](docs/configuration.md) links every configuration class and explains recipe structure, consumption budgets, and suite options. Each class documents its fields, accepted choices, and their effects next to the defaults.
+
 ## Experiments
 
 | Family | Behavior | Recipes |

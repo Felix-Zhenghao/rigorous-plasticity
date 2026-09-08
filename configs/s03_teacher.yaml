@@ -1,3 +1,4 @@
+# Field meanings and allowed values: docs/configuration.md.
 paradigm: random_teacher
 probe:
   input_source: unseen

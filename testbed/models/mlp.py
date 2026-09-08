@@ -1,12 +1,25 @@
+from __future__ import annotations
+
 from math import prod
+from typing import TYPE_CHECKING
 
-from torch import nn
+from torch import Tensor, nn
 
+from .config import MLPConfig
 from .layers import HiddenLayer
+
+if TYPE_CHECKING:
+    from testbed.core.types import ProblemSpec
+
+    from .initialization import InitializationRule
 
 
 class MLP(nn.Module):
-    def __init__(self, problem, config):
+    initialization_rules: dict[str, InitializationRule]
+    resolved_config: dict[str, object]
+    architecture: str
+
+    def __init__(self, problem: ProblemSpec, config: MLPConfig) -> None:
         super().__init__()
         width = prod(problem.input_shape)
         self.hidden = nn.ModuleList()
@@ -19,7 +32,7 @@ class MLP(nn.Module):
         self.head_input_dim = width
         self.head = nn.Linear(width, len(problem.output_ids), bias=config.head_bias)
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         x = x.flatten(1)
         for layer in self.hidden:
             x = layer(x)
@@ -28,5 +41,5 @@ class MLP(nn.Module):
         return self.head(x)
 
 
-def build(problem, config):
+def build(problem: ProblemSpec, config: MLPConfig) -> MLP:
     return MLP(problem, config)

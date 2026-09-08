@@ -1,4 +1,6 @@
 """Measure loading and optional learning separately, preserving scientific budgets."""
+from __future__ import annotations
+
 import argparse
 import hashlib
 import json
@@ -15,7 +17,7 @@ from testbed.core.factory import make_model
 from testbed.training import make_paradigm
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--tasks", type=int, default=1000)
     parser.add_argument("--samples", type=int, default=100)

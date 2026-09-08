@@ -1,18 +1,26 @@
 """Portable checkpoint manifests and isolated reconstruction helpers."""
+from __future__ import annotations
+
 import os
 from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import torch
 
 from .config import RunConfig, plain, strict_dataclass
 from .optim import optimizer_dict, set_learning_rate
 from .random import rng_state, set_rng_state
-from .types import ProblemSpec
+from .types import Batch, Learner, ProblemSpec
+
+if TYPE_CHECKING:
+    from testbed.data.datasets import DatasetInput
+
+    from .consumption import Consumer
 
 
-def atomic_save(value, path):
+def atomic_save(value: Any, path: str | Path) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
@@ -20,7 +28,7 @@ def atomic_save(value, path):
     os.replace(temporary, path)
 
 
-def load_checkpoint(path):
+def load_checkpoint(path: str | Path) -> dict[str, Any]:
     state = torch.load(path, map_location="cpu", weights_only=False)
     if state.get("format_version") != 1:
         raise ValueError("unsupported checkpoint format")
@@ -28,12 +36,12 @@ def load_checkpoint(path):
 
 
 class SeenInputBank:
-    def __init__(self, capacity):
+    def __init__(self, capacity: int) -> None:
         self.capacity = capacity
         self.inputs, self.ids = [], []
         self._membership = set()
 
-    def add(self, batch):
+    def add(self, batch: Batch) -> None:
         if len(self.ids) >= self.capacity:
             return
         x, _, ids = batch
@@ -46,11 +54,11 @@ class SeenInputBank:
             if len(self.ids) >= self.capacity:
                 break
 
-    def state_dict(self):
+    def state_dict(self) -> dict[str, Any]:
         return {"capacity": self.capacity, "inputs": torch.stack(self.inputs) if self.inputs else None,
                 "ids": torch.tensor(self.ids, dtype=torch.long)}
 
-    def load_state_dict(self, state, prefix=None):
+    def load_state_dict(self, state: dict[str, Any], prefix: int | None = None) -> None:
         self.capacity = state["capacity"]
         n = len(state["ids"]) if prefix is None else prefix
         if n > len(state["ids"]):
@@ -60,7 +68,16 @@ class SeenInputBank:
         self._membership = set(self.ids)
 
 
-def snapshot(config, learner, consumer, bank, *, bank_path, recorder_state=None, report_state=None):
+def snapshot(
+    config: RunConfig,
+    learner: Learner,
+    consumer: Consumer,
+    bank: SeenInputBank,
+    *,
+    bank_path: str | Path,
+    recorder_state: dict[str, Any] | None = None,
+    report_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     bank_state = bank.state_dict()
     if Path(bank_path).exists():
         existing = torch.load(bank_path, map_location="cpu", weights_only=False)
@@ -81,7 +98,7 @@ def snapshot(config, learner, consumer, bank, *, bank_path, recorder_state=None,
             "recorder_state": recorder_state, "report_state": report_state or {}}
 
 
-def build_learner(config, problem, *, start_update=0):
+def build_learner(config: RunConfig, problem: ProblemSpec, *, start_update: int = 0) -> Learner:
     from .factory import make_model
     learner = make_model(config.method["name"], config.model["name"], problem=problem,
                          model_config={k: v for k, v in config.model.items() if k != "name"},
@@ -93,7 +110,15 @@ def build_learner(config, problem, *, start_update=0):
     return learner
 
 
-def restore_run(state, *, device=None, output_dir=None, data_root=None, num_workers=None, datasets=None):
+def restore_run(
+    state: dict[str, Any],
+    *,
+    device: str | None = None,
+    output_dir: str | Path | None = None,
+    data_root: str | Path | None = None,
+    num_workers: int | None = None,
+    datasets: DatasetInput = None,
+) -> tuple[RunConfig, Learner, Consumer, SeenInputBank]:
     from testbed.training import make_paradigm
 
     from .consumption import Consumer
@@ -122,7 +147,7 @@ def restore_run(state, *, device=None, output_dir=None, data_root=None, num_work
     return config, learner, consumer, bank
 
 
-def load_network_optimizer(learner, checkpoint):
+def load_network_optimizer(learner: Learner, checkpoint: dict[str, Any]) -> None:
     """Restore only network statistics, rejecting incompatible probe settings."""
     saved_cfg = optimizer_dict(checkpoint["config"]["optimizer"])
     probe_cfg = optimizer_dict(learner.optimizer_config)

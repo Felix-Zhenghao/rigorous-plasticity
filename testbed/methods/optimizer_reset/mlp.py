@@ -1,11 +1,32 @@
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
+
+import torch
+
 from testbed.core.factory import make_model
+from testbed.core.optim import OptimizerConfig
+from testbed.core.types import ProblemSpec
+from testbed.models.config import MLPConfig
 
 from .config import OptResetConfig
 from .learner import OptimizerResetLearner
 
 
-def build(*, problem, model_config, method_config, optimizer_config, lr_schedule="constant",
-          grad_clip_norm=None, device="cpu", seed=0, start_update=0, method_seed=None):
+def build(
+    *,
+    problem: ProblemSpec,
+    model_config: MLPConfig | Mapping[str, Any],
+    method_config: OptResetConfig | Mapping[str, Any],
+    optimizer_config: OptimizerConfig | Mapping[str, Any],
+    lr_schedule: str | Mapping[str, Any] | None = "constant",
+    grad_clip_norm: float | None = None,
+    device: str | torch.device = "cpu",
+    seed: int = 0,
+    start_update: int = 0,
+    method_seed: int | None = None,
+) -> OptimizerResetLearner:
     config = method_config if isinstance(method_config, OptResetConfig) else OptResetConfig(**method_config)
     base = make_model(config.base_method, "mlp", problem=problem, model_config=model_config,
                       method_config=config.base_config, optimizer_config=optimizer_config, lr_schedule=lr_schedule,

@@ -1,4 +1,9 @@
+from __future__ import annotations
+
 from pathlib import Path
+from typing import Any
+
+import torch
 
 from testbed.core.config import strict_dataclass
 from testbed.core.metrics import write_json
@@ -9,7 +14,10 @@ from testbed.training.class_remap.data import draw_residuals
 from .config import OffsetProbeConfig
 
 
-def run(config, checkpoint, output_dir, *, device="cpu", seed=0, **unused):
+def run(
+    config: OffsetProbeConfig | dict[str, Any], checkpoint: str | Path | dict[str, Any],
+    output_dir: str | Path, *, device: str | torch.device = "cpu", seed: int = 0, **unused: Any,
+) -> ProbeResult:
     config = strict_dataclass(OffsetProbeConfig, config) if isinstance(config, dict) else config
     checkpoint = source_state(checkpoint)
     artifact = checkpoint["paradigm_state"].get("fixed_regression")

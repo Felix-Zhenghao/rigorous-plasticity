@@ -1,21 +1,27 @@
+from __future__ import annotations
+
 import time
 from collections import OrderedDict, deque
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
+from typing import Any
 
 import torch
-from torch import nn
+from torch import Tensor, nn
 from torch.nn import functional as F
 
 from testbed.core.losses import supervised_loss
 from testbed.core.optim import set_learning_rate
-from testbed.core.types import StepResult
+from testbed.core.types import Batch, StepResult
 from testbed.methods.backprop.learner import BackpropLearner
+
+from .config import CChainConfig
 
 
 class CChainLearner(BackpropLearner):
     """Lagged prediction matching with bounded, disjoint past-input replay."""
 
-    def __init__(self, *, config, **kwargs):
+    def __init__(self, *, config: CChainConfig, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.config = config
         if config.distance == "prediction_ce" and self.problem.loss_kind != "cross_entropy":
@@ -35,7 +41,7 @@ class CChainLearner(BackpropLearner):
         self.coefficient = config.coefficient
         self.last_reference_ids = ()
 
-    def reference_loss(self, supervised_ids):
+    def reference_loss(self, supervised_ids: set[int]) -> Tensor:
         self.last_reference_ids = ()
         eligible = [key for key in self.recency if key not in supervised_ids]
         if not eligible or self.history_count <= self.config.reference_lag_updates:
@@ -60,7 +66,7 @@ class CChainLearner(BackpropLearner):
         return F.mse_loss(current, frozen)
 
     @torch.no_grad()
-    def remember(self, inputs, ids):
+    def remember(self, inputs: Tensor, ids: Sequence[int]) -> None:
         for x, key in zip(inputs.detach().cpu(), ids):
             if key in self.recency:
                 slot = self.recency.pop(key)
@@ -75,7 +81,7 @@ class CChainLearner(BackpropLearner):
         for name, value in self.network.state_dict().items():
             self.history[self.history_cursor][name].copy_(value)
 
-    def train_step(self, batch):
+    def train_step(self, batch: Batch) -> StepResult:
         with self.rng:
             inputs, targets, example_ids = batch
             inputs, targets = inputs.to(self.device), targets.to(self.device)
@@ -111,13 +117,13 @@ class CChainLearner(BackpropLearner):
                 "maintenance_seconds": time.perf_counter() - started})
 
     @property
-    def cost_metrics(self):
+    def cost_metrics(self) -> dict[str, int]:
         metrics = super().cost_metrics
         metrics["frozen_state_bytes"] = sum(t.numel() * t.element_size() for snapshot in self.history for t in snapshot.values()) + sum(t.numel() * t.element_size() for t in self.reference.state_dict().values())
         metrics["reference_buffer_bytes"] = self.inputs.numel() * self.inputs.element_size()
         return metrics
 
-    def state_dict(self):
+    def state_dict(self) -> dict[str, Any]:
         state = super().state_dict()
         state["c_chain"] = deepcopy({"history": self.history, "history_cursor": self.history_cursor,
             "history_count": self.history_count, "inputs": self.inputs[:len(self.recency)],
@@ -126,7 +132,7 @@ class CChainLearner(BackpropLearner):
             "coefficient": self.coefficient, "last_reference_ids": self.last_reference_ids})
         return state
 
-    def load_state_dict(self, state):
+    def load_state_dict(self, state: Mapping[str, Any]) -> None:
         saved = state["c_chain"]
         if len(saved["history"]) != len(self.history) or len(saved["recency"]) > self.config.buffer_size:
             raise ValueError("C-CHAIN checkpoint history or buffer capacity differs")

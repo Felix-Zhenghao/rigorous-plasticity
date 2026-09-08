@@ -1,3 +1,4 @@
+# Field meanings and allowed values: docs/configuration.md.
 # P02's 500 * 390 minibatches of independent draws. Exponential endpoint convention: docs/data_notes.md.
 paradigm: class_incremental
 data:

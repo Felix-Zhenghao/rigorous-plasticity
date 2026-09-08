@@ -1,15 +1,34 @@
-from dataclasses import asdict, is_dataclass
+from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import asdict, is_dataclass
+from typing import Any
+
+import torch
 from torch import nn
 
 from testbed.core.factory import make_network
+from testbed.core.optim import OptimizerConfig
+from testbed.core.types import ProblemSpec
+from testbed.models.config import MLPConfig
 
-from .config import CONFIG_CLASS
+from .config import CONFIG_CLASS, NaPConfig
 from .learner import NaPLearner
 
 
-def build(*, problem, model_config, method_config, optimizer_config, lr_schedule="constant",
-          grad_clip_norm=None, device="cpu", seed=0, start_update=0, method_seed=None):
+def build(
+    *,
+    problem: ProblemSpec,
+    model_config: MLPConfig | Mapping[str, Any],
+    method_config: NaPConfig | Mapping[str, Any],
+    optimizer_config: OptimizerConfig | Mapping[str, Any],
+    lr_schedule: str | Mapping[str, Any] | None = "constant",
+    grad_clip_norm: float | None = None,
+    device: str | torch.device = "cpu",
+    seed: int = 0,
+    start_update: int = 0,
+    method_seed: int | None = None,
+) -> NaPLearner:
     config = method_config if isinstance(method_config, CONFIG_CLASS) else CONFIG_CLASS(**method_config)
     model_config = asdict(model_config) if is_dataclass(model_config) else dict(model_config)
     model_config.update(norm="layer", bias=False)

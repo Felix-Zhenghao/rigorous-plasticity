@@ -1,18 +1,26 @@
+from __future__ import annotations
+
 import time
+from collections.abc import Mapping
 from copy import deepcopy
 from math import sqrt
+from typing import Any
 
 import torch
 from torch import nn
 
 from testbed.core.losses import supervised_loss
 from testbed.core.optim import set_learning_rate
-from testbed.core.types import StepResult
+from testbed.core.types import Batch, StepResult
 from testbed.methods.backprop.learner import BackpropLearner
+
+from .config import NaPConfig
 
 
 class NaPLearner(BackpropLearner):
-    def __init__(self, *, config, selected_weights, **kwargs):
+    def __init__(
+        self, *, config: NaPConfig, selected_weights: Mapping[str, nn.Parameter], **kwargs: Any
+    ) -> None:
         super().__init__(**kwargs)
         self.config, self.selected_weights = config, selected_weights
         self.selected_parameters = list(self.selected_weights)
@@ -22,7 +30,7 @@ class NaPLearner(BackpropLearner):
             raise ValueError("NaP joint affine projection requires homogeneous activations")
 
     @torch.no_grad()
-    def intervene(self):
+    def intervene(self) -> int:
         skipped = 0
         for name, parameter in self.selected_weights.items():
             norm = parameter.float().norm()
@@ -53,7 +61,7 @@ class NaPLearner(BackpropLearner):
             module.weight.copy_(effective - 1 if getattr(module, "gain_mode", "standard") == "residual" else effective)
         return skipped
 
-    def train_step(self, batch):
+    def train_step(self, batch: Batch) -> StepResult:
         with self.rng:
             x, targets, _ = batch
             device = next(self.network.parameters()).device
@@ -75,17 +83,17 @@ class NaPLearner(BackpropLearner):
                               "projection_skipped": float(skipped), "maintenance_seconds": time.perf_counter() - started})
 
     @property
-    def cost_metrics(self):
+    def cost_metrics(self) -> dict[str, int]:
         metrics = super().cost_metrics
         metrics["frozen_state_bytes"] = sum(t.numel() * t.element_size() for t in self.radii.values())
         return metrics
 
-    def state_dict(self):
+    def state_dict(self) -> dict[str, Any]:
         state = super().state_dict()
         state["nap"] = {"radii": self.radii, "selected_names": list(self.selected_weights)}
         return deepcopy(state)
 
-    def load_state_dict(self, state):
+    def load_state_dict(self, state: Mapping[str, Any]) -> None:
         if state["nap"]["selected_names"] != list(self.selected_weights):
             raise ValueError("NaP parameter scope differs from checkpoint")
         super().load_state_dict(state)

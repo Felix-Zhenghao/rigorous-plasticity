@@ -1,12 +1,19 @@
-from torch import nn
+from __future__ import annotations
+
+from typing import Any
+
+from torch import Tensor, nn
 
 from testbed.core.losses import supervised_loss
 from testbed.core.optim import set_learning_rate
-from testbed.core.types import StepResult
+from testbed.core.types import Batch, StepResult
 from testbed.methods.backprop.learner import BackpropLearner
+from testbed.models import Network
+
+from .config import L2Config
 
 
-def select_parameters(network, config):
+def select_parameters(network: Network, config: L2Config) -> dict[str, nn.Parameter]:
     selected = {}
     modules = dict(network.named_modules())
     scope = config.parameter_scope
@@ -35,16 +42,16 @@ def select_parameters(network, config):
 
 
 class L2Learner(BackpropLearner):
-    def __init__(self, *, config, **kwargs):
+    def __init__(self, *, config: L2Config, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.config = config
         self.selected = select_parameters(self.network, config)
         self.selected_parameters = list(self.selected)
 
-    def penalty(self):
+    def penalty(self) -> Tensor:
         return self.config.coefficient * 0.5 * sum(p.square().sum() for p in self.selected.values())
 
-    def train_step(self, batch):
+    def train_step(self, batch: Batch) -> StepResult:
         x, targets, _ = batch
         with self.rng:
             lr = set_learning_rate(self.optimizer, self.optimizer_config, self.lr_schedule, self.completed_updates)
