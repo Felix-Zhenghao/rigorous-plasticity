@@ -81,10 +81,31 @@ Implementation: [configuration](rigorous-plasticity/testbed/training/pixel_permu
 
 ## class incremental learning
 
-Class incremental training uses real datasets for both source and transfer target. `progression="classes"` expands the available class set, `"examples"` expands a nested example pool, and `"transfer"` switches to target-only data. The complete configured output space exists from initialization.
+Data pipeline: **dataset → eligible training pool → task arrivals → arrival chunks → minibatches → training updates**.
 
-For class expansion, `class_probs` is masked to classes present in the current eligible pool and renormalized for each stage. Supply one vector in sorted final output-ID order or one row per stage. At least one available class must have positive probability; without-replacement class quotas must fit the pool.
+The essence of class incremental training is gradually expanding the eligible training pool: first warm-start the model on a small subset of a larger dataset, then continue training from that checkpoint on larger subsets. Each version of the eligible training pool defines a **stage**.
 
-For example expansion, `arrival_order="iid"` takes prefixes of a random pool order; `"class_ordered"` groups the pool by `class_order` before taking prefixes. These are the two supported arrival orders.
+How the pool expands is controlled by `progression` and `stage_sizes`:
 
-Smooth transitions mix the old pool with the expanded pool using `linear`, `exponential`, or `explicit` coefficients and require `class_probs=None`. Both replacement policies are supported. Without replacement, `task_samples` must not exceed the expanded pool size, and every draw removes the selected example from both pools for the rest of the stage. Once the old pool is exhausted, sampling uses only the remaining expanded pool regardless of the coefficient. Each sampled arrival stays fixed during repeated fitting.
+- With `progression="classes"` and `stage_sizes=[5,10,20]`, the pool contains examples from 5, then 10, then 20 classes in total. `class_order` specifies their order; `None` gives one seeded random order.
+- With `progression="examples"`, `stage_sizes=[0.1,0.5,1.0]` expands the pool to 10%, 50%, then 100% of the master training pool, after validation splitting and any `pool_size` cap. The default `arrival_order="iid"` introduces examples randomly: at the first stage, 10% is sampled uniformly at random from the master training pool. Later stages retain those examples and randomly add more from the remainder until the requested pool size is reached. If `arrival_order="class_ordered"`, `class_order` determines which classes contribute examples first, while `stage_sizes` determines the total pool size at each stage. For instance, for two classes with 50 examples each, `class_order=[1,0]` and a stage size of `0.75` admit all 50 examples of class 1 and 25 of class 0.
+- Finally, `progression="transfer"` trains on a subset of `dataset`, then switches to a subset of `target_dataset`. Unlike `classes` and `examples`, it does not accumulate eligible data across stages.
+
+When `progression="classes" or progression="examples"`, abrupt or smooth stage transitions are supported. When  `progression="transfer"`, the transition between stages is always abrupt. At an abrupt transition, sampling switches directly from `pool_t `to `pool_{t+1}`. A smooth transition gradually shifts sampling between them. With replacement, the distribution is:
+
+```text
+Q = (1 - α) Uniform(pool_t) + α Uniform(pool_{t+1})
+```
+
+Here, α=0 samples only from `pool_t`; α=1 samples from `pool_{t+1}`, including the old pool. Setting `transition="linear"` makes α increase linearly across transition chunks; setting `transition="exponential"` makes α approach 1 exponentially.
+
+`transition_chunks` specifies the transition duration in arrival chunks. Let `R=transition_chunks` and let `r` count chunks from 1 to R. The schedules are:
+
+```text
+linear:      α_r = (r - 1) / (R - 1)      (R ≥ 2)
+exponential: α_r = 1 - transition_gamma ** (50 * r / R)
+```
+
+For the exponential schedule, `transition_gamma` lies in `(0, 1)`; values closer to 1 make α approach 1 more slowly. After the first R chunks, α is set to 1. Without replacement, use the remaining examples; once the old pool empties, sample only from the remaining expanded pool.
+
+The implementation of smooth transitions is special. First allocate `task_samples` arrival slots, then fill them by sampling chunks of `chunk_size` arrivals. Each chunk uses its own α according to the transition schedule. When consuming `task_arrivals`, the model trains chunk by chunk, spending `epochs` passes or `updates` optimizer steps on each chunk before moving on. Reusing a chunk keeps its arrivals and α fixed. Sampling successive chunks with changing α therefore trains the model on a gradually changing mixture.
