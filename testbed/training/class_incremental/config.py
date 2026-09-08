@@ -11,8 +11,8 @@ class ClassIncrementalConfig:
     """Class, example, or source-to-target availability stages.
 
     Fields:
-        dataset: Dataset registry name: synthetic, mnist, fashion_mnist, emnist_balanced,
-            cifar10, cifar100, svhn, tiny_imagenet, or a registered custom loader.
+        dataset: Real dataset registry name: mnist, fashion_mnist, emnist_balanced,
+            cifar10, cifar100, svhn, tiny_imagenet, or a registered real dataset loader.
             Loader-specific settings go in data_options.
         stage_sizes: Cumulative availability at each stage. With progression="classes",
             use positive class counts or "all". With "examples", use positive example
@@ -61,13 +61,8 @@ class ClassIncrementalConfig:
             a seeded random order. "classes" may list a subset; "examples"/"transfer"
             require all source classes. Sets class-stage order and class-grouped arrival order.
         arrival_order: For progression="examples": "iid" uses random pool prefixes;
-            "class_ordered" groups examples by class_order before taking prefixes;
-            "mixed" builds disjoint IID and class-grouped partitions, then cumulative unions.
-        uniform_fraction: For arrival_order="mixed", fraction in [0, 1] of the master
-            pool reserved for IID examples. The rest is divided by class across stages;
-            IID examples fill each requested stage increment. Incompatible totals raise
-            an error. 1 gives IID-only partitions; other arrival orders require 1.
-        target_dataset: Dataset registry name for stage 1 of progression="transfer";
+            "class_ordered" groups examples by class_order before taking prefixes.
+        target_dataset: Real dataset registry name for stage 1 of progression="transfer";
             required there and None otherwise. Source and target preprocessing must
             produce the same input shape.
         transition: Scalar or one choice per stage. "abrupt" samples the current pool
@@ -92,10 +87,9 @@ class ClassIncrementalConfig:
             space, so equal mapped IDs mean the same prediction class.
         target_label_map: Transfer target equivalent of source_label_map; must cover
             every native target class ID. None keeps target native IDs.
-        data_options: Keyword arguments for the dataset loader. synthetic accepts
-            input_shape (default [1, 8, 8]), num_classes (4), n_train (256), n_test (64),
-            and seed (defaults to the data seed). Torchvision loaders accept download
-            (True); tiny_imagenet accepts download (False), but needs an extracted archive.
+        data_options: Keyword arguments for the real dataset loader. Torchvision
+            loaders accept download (True); tiny_imagenet accepts download (False),
+            but needs an extracted archive.
             See testbed.data.datasets.load_dataset for constraints and custom loaders.
         target_data_options: Loader keyword arguments for target_dataset in transfer;
             same accepted options as data_options. Must be empty outside transfer.
@@ -119,7 +113,6 @@ class ClassIncrementalConfig:
     class_probs: list[float] | list[list[float]] | None = None
     class_order: list[int] | str | None = None
     arrival_order: str = "iid"
-    uniform_fraction: float = 1.0
     target_dataset: str | None = None
     transition: str | list[str] = "abrupt"
     transition_chunks: int | list[int] = 1
@@ -137,16 +130,16 @@ class ClassIncrementalConfig:
     def __post_init__(self) -> None:
         positive(self.num_tasks, "number of stages")
         validate_data_fields(self, self.num_tasks, initial_zero=True)
+        if "synthetic" in (self.dataset, self.target_dataset):
+            raise ValueError("Class incremental training requires real datasets for source and target")
         if self.progression not in {"classes", "examples", "transfer"}:
             raise ValueError("progression must be classes, examples, or transfer")
         if self.pool_refresh != "fixed":
             raise ValueError("Incremental stage construction requires a fixed master pool")
-        if self.arrival_order not in {"iid", "class_ordered", "mixed"} or not 0 <= self.uniform_fraction <= 1:
-            raise ValueError("Invalid arrival_order or uniform_fraction")
-        if self.progression != "examples" and (self.arrival_order != "iid" or self.uniform_fraction != 1):
-            raise ValueError("arrival_order and uniform_fraction overrides require progression=examples")
-        if self.arrival_order != "mixed" and self.uniform_fraction != 1:
-            raise ValueError("uniform_fraction applies only to mixed example arrival")
+        if self.arrival_order not in {"iid", "class_ordered"}:
+            raise ValueError("arrival_order must be iid or class_ordered")
+        if self.progression != "examples" and self.arrival_order != "iid":
+            raise ValueError("arrival_order overrides require progression=examples")
         if not 0 < self.transition_gamma < 1:
             raise ValueError("transition_gamma must be strictly between zero and one")
         if self.class_order is not None and self.class_order != "random" and not isinstance(self.class_order, list):

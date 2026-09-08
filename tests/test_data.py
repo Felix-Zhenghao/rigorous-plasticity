@@ -159,10 +159,10 @@ def test_class_incremental_explicit_subset_defines_the_final_output_space() -> N
     assert set(y for _, y, _ in rows(p.get_data().data)) == {1, 3}
 
 
-@pytest.mark.parametrize("order,fraction", [("iid", 1), ("class_ordered", 1), ("mixed", 0.5), ("mixed", 1)])
-def test_example_expansion_constructs_disjoint_arrival_partitions(order: str, fraction: float) -> None:
+@pytest.mark.parametrize("order", ["iid", "class_ordered"])
+def test_example_expansion_constructs_nested_pools(order: str) -> None:
     p = paradigm("class_incremental", progression="examples", stage_sizes=[0.5, 1.0], arrival_order=order,
-                 uniform_fraction=fraction, class_order=[0, 1, 2, 3])
+                 class_order=[0, 1, 2, 3])
     first, second = p.stage_pools
     assert len(first) == 20 and len(second) == 40
     assert len(set(second.tolist())) == 40 and set(first.tolist()) <= set(second.tolist())
@@ -218,7 +218,8 @@ def test_data_state_restores_arrivals_targets_and_current_eval(name: str) -> Non
 def test_s05_offsets_share_exact_inputs_centered_residuals_and_ids() -> None:
     def build(offset: float) -> ClassRemap | PixelPermutation | ClassIncremental:
         return paradigm(num_tasks=1, first_mapping="identity", target_mode="fixed_regression", target_mean=offset,
-                        target_scale=3.0, pool_size=16, epochs=None, updates=4)
+                        teacher={"name": "mlp", "hidden_sizes": [8]}, target_scale=3.0,
+                        pool_size=16, epochs=None, updates=4)
     zero, shifted = build(0), build(8)
     a, b = zero.fixed_regression, shifted.fixed_regression
     assert zero.problem.loss_kind == "mse" and zero.problem.output_ids == (0,)
@@ -232,7 +233,8 @@ def test_s05_offsets_share_exact_inputs_centered_residuals_and_ids() -> None:
     restored.load_state_dict(shifted.state_dict())
     assert torch.equal(restored.fixed_regression["inputs"], b["inputs"])
     with pytest.raises(ValueError, match="complete fixed pool"):
-        paradigm(num_tasks=1, first_mapping="identity", target_mode="fixed_regression", pool_size=16, task_samples=8)
+        paradigm(num_tasks=1, first_mapping="identity", target_mode="fixed_regression",
+                 teacher={"name": "mlp"}, pool_size=16, task_samples=8)
 
 
 def test_scientifically_invalid_incremental_modes_fail() -> None:
@@ -346,31 +348,46 @@ def test_torchvision_adapters_keep_native_metadata_and_official_splits(
         assert all(call["split"] == "balanced" for call in calls)
 
 
-@pytest.mark.parametrize("override", [dict(target_family="teacher"), dict(teacher={"name": "mlp"}),
+@pytest.mark.parametrize("override", [dict(target_family="sine_teacher"), dict(teacher={"name": "mlp"}),
                                       dict(target_mean=8), dict(target_scale=2), dict(center_targets=False), dict(omega=10)])
 def test_native_classification_rejects_inactive_regression_options(override: dict[str, Any]) -> None:
     with pytest.raises(ValueError, match="require target_mode=fixed_regression"):
         ClassRemapConfig(dataset="toy", num_tasks=1, task_samples="pool", chunk_size="task", **override)
 
 
-@pytest.mark.parametrize("override", [dict(teacher={"name": "mlp"}), dict(omega=10),
-                                      dict(target_family="teacher", teacher={"name": "mlp"}, omega=10)])
-def test_regression_rejects_options_ignored_by_its_target_family(override: dict[str, Any]) -> None:
+@pytest.mark.parametrize("omega", [10, [10]])
+def test_teacher_regression_rejects_unused_frequency(omega: float | list[float]) -> None:
     with pytest.raises(ValueError, match="applies only"):
         ClassRemapConfig(dataset="toy", num_tasks=1, task_samples="pool", chunk_size="task",
-                         target_mode="fixed_regression", first_mapping="identity", **override)
+                         target_mode="fixed_regression", first_mapping="identity", teacher={"name": "mlp"}, omega=omega)
 
 
 @pytest.mark.parametrize("progression", ["classes", "transfer"])
-@pytest.mark.parametrize("override", [dict(arrival_order="class_ordered"), dict(arrival_order="mixed"), dict(uniform_fraction=0.5)])
-def test_only_example_progression_accepts_example_arrival_options(progression: str, override: dict[str, Any]) -> None:
+def test_only_example_progression_accepts_class_ordered_arrivals(progression: str) -> None:
     with pytest.raises(ValueError, match="require progression=examples"):
         ClassIncrementalConfig(dataset="toy", stage_sizes=[1, 2], task_samples="pool", chunk_size="task",
-                               progression=progression, target_dataset="other" if progression == "transfer" else None, **override)
+                               progression=progression, target_dataset="other" if progression == "transfer" else None,
+                               arrival_order="class_ordered")
+
+
+def test_incremental_rejects_removed_arrival_options() -> None:
+    config = dict(dataset="mnist", stage_sizes=[0.5, 1.0], task_samples="pool", chunk_size="task", progression="examples")
+    with pytest.raises(ValueError, match="arrival_order must be"):
+        ClassIncrementalConfig(**config, arrival_order="mixed")
+    with pytest.raises(TypeError, match="uniform_fraction"):
+        ClassIncrementalConfig(**config, uniform_fraction=0.5)
+
+
+@pytest.mark.parametrize("dataset,target_dataset", [("synthetic", None), ("synthetic", "mnist"), ("mnist", "synthetic")])
+def test_incremental_requires_real_source_and_target_datasets(dataset: str, target_dataset: str | None) -> None:
+    with pytest.raises(ValueError, match="requires real datasets"):
+        ClassIncrementalConfig(dataset=dataset, target_dataset=target_dataset, stage_sizes=[1, 2],
+                               task_samples="pool", chunk_size="task",
+                               progression="transfer" if target_dataset else "classes")
 
 
 @pytest.mark.parametrize("override", [dict(target_data_options={"download": False}), dict(alpha_values=[None, [0, 1]]),
-                                      dict(transition_gamma=0.9), dict(uniform_fraction=0.5),
+                                      dict(transition_gamma=0.9),
                                       dict(transition=["exponential", "abrupt"], transition_gamma=0.9)])
 def test_incremental_rejects_inactive_target_and_mixture_options(override: dict[str, Any]) -> None:
     with pytest.raises(ValueError):

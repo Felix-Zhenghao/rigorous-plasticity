@@ -4,12 +4,12 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
-from testbed.data.sampling import positive, validate_data_fields
+from testbed.data.sampling import positive, scheduled, validate_data_fields
 
 
 @dataclass
 class ClassRemapConfig:
-    """Class-label remapping or stationary scalar-regression data.
+    """Class-label remapping or changing teacher targets on fixed inputs.
 
     Fields:
         dataset: Dataset registry name: synthetic, mnist, fashion_mnist, emnist_balanced,
@@ -57,25 +57,29 @@ class ClassRemapConfig:
             reuses a bank of K mappings cyclically (task i uses mapping i % K).
         target_mode: "native" fits remapped class labels with cross-entropy.
             "fixed_regression" fits scalar targets on one fixed input set with MSE;
-            it requires num_tasks=1, first_mapping="identity", pool_refresh="fixed",
+            teacher weights are reinitialized independently at every task boundary.
+            It requires first_mapping="identity", pool_refresh="fixed",
             task_samples="pool", chunk_size="task" (or equal numeric sizes),
             augmentation="none", sampling="without_replacement", and class_probs=None.
-        target_family: For fixed_regression: "iid_normal" draws independent N(0, 1)
-            values; "teacher" uses a randomly initialized scalar-output network;
-            "sine_teacher" uses sin(omega * teacher(x)). Values are drawn once per input set.
-        target_mean: Additive scalar offset b in y = b + target_scale * (base - center);
-            used only for fixed_regression. With center_targets=True, training target mean is b.
-        target_scale: Nonnegative multiplier on base residuals for fixed_regression.
+        target_family: For fixed_regression: "teacher" (default) uses a randomly
+            initialized scalar-output network; "sine_teacher" uses sin(omega * teacher(x)).
+            Targets stay fixed within each task.
+        target_mean: Additive offset b in y = b + target_scale * (base - center);
+            scalar or one value per task, used only for fixed_regression.
+            With center_targets=True, each task's training target mean is b.
+        target_scale: Nonnegative multiplier on base residuals for fixed_regression;
+            scalar or one value per task.
             It does not normalize their variance; 0 makes every target equal target_mean.
         center_targets: For fixed_regression, subtract the mean base value over the
-            fixed training inputs before scaling. Held-out targets use the same training
-            mean. False leaves the base values uncentered.
-        teacher: Architecture recipe for teacher/sine_teacher targets; required for
-            those families and None for iid_normal. Use {name: mlp|resnet_18|vit,
+            fixed training inputs before scaling, recomputed for each task. Held-out
+            targets use that task's training mean. False leaves base values uncentered.
+        teacher: Required architecture recipe for fixed_regression targets.
+            Use {name: mlp|resnet_18|vit,
             model_config: {...}}; architecture aliases name, which defaults to "mlp".
             See the selected model config for architecture options; output width is 1.
         omega: Finite angular multiplier in sin(omega * teacher(x)); only for
-            sine_teacher. Higher magnitude produces faster oscillations in teacher output.
+            sine_teacher, scalar or one value per task. Higher magnitude produces
+            faster oscillations in teacher output.
         data_options: Keyword arguments for the dataset loader. synthetic accepts
             input_shape (default [1, 8, 8]), num_classes (4), n_train (256), n_test (64),
             and seed (defaults to the data seed). Torchvision loaders accept download
@@ -102,12 +106,12 @@ class ClassRemapConfig:
     first_mapping: str = "random"
     recurrence_period: int | None = None
     target_mode: str = "native"
-    target_family: str = "iid_normal"
-    target_mean: float = 0.0
-    target_scale: float = 1.0
+    target_family: str = "teacher"
+    target_mean: float | list[float] = 0.0
+    target_scale: float | list[float] = 1.0
     center_targets: bool = True
     teacher: dict[str, Any] | None = None
-    omega: float = 1e5
+    omega: float | list[float] = 1e5
     data_options: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -121,23 +125,26 @@ class ClassRemapConfig:
             raise ValueError("stable_classes must be unique")
         if self.target_mode not in {"native", "fixed_regression"}:
             raise ValueError("Unknown target_mode")
-        if self.target_family not in {"iid_normal", "teacher", "sine_teacher"}:
-            raise ValueError("Unknown target_family")
-        if not all(math.isfinite(v) for v in (self.target_mean, self.target_scale, self.omega)) or self.target_scale < 0:
-            raise ValueError("Target parameters must be finite and target_scale nonnegative")
+        if self.target_family not in {"teacher", "sine_teacher"}:
+            raise ValueError("target_family must be teacher or sine_teacher")
+        for name in ("target_mean", "target_scale", "omega"):
+            for index in range(self.num_tasks):
+                value = scheduled(getattr(self, name), index, self.num_tasks, name)
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                    raise ValueError(f"{name} must contain finite numbers")
+                if name == "target_scale" and value < 0:
+                    raise ValueError("target_scale must be nonnegative")
         if self.target_mode == "native":
             inactive = [name for name in ("target_family", "target_mean", "target_scale", "center_targets", "teacher", "omega")
                         if getattr(self, name) != self.__dataclass_fields__[name].default]
             if inactive:
                 raise ValueError(f"{', '.join(inactive)} require target_mode=fixed_regression")
         if self.target_mode == "fixed_regression":
-            if self.num_tasks != 1 or self.first_mapping != "identity" or self.pool_refresh != "fixed":
-                raise ValueError("Fixed regression requires one stationary identity-mapped task and a fixed pool")
+            if self.first_mapping != "identity" or self.pool_refresh != "fixed":
+                raise ValueError("Fixed regression requires first_mapping=identity and a fixed pool")
             if self.augmentation != "none" or self.sampling != "without_replacement" or self.class_probs is not None:
                 raise ValueError("Fixed regression requires no augmentation, no replacement, and empirical sampling")
-            if self.target_family != "iid_normal" and self.teacher is None:
-                raise ValueError("Teacher target families require a teacher architecture specification")
-            if self.target_family == "iid_normal" and self.teacher is not None:
-                raise ValueError("teacher applies only to teacher or sine_teacher targets")
+            if self.teacher is None:
+                raise ValueError("Fixed regression requires a teacher architecture specification")
             if self.target_family != "sine_teacher" and self.omega != self.__dataclass_fields__["omega"].default:
                 raise ValueError("omega applies only to sine_teacher targets")

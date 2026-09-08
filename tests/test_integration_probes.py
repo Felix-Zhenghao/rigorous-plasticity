@@ -25,7 +25,8 @@ def recipe(
                 validation_fraction=0, data_options=dict(n_train=24, n_test=12, num_classes=3, input_shape=[1, 4, 4]))
     if regression:
         data.update(num_tasks=1, first_mapping="identity", target_mode="fixed_regression",
-                    target_mean=8, pool_size=12, task_samples="pool", chunk_size="task")
+                    teacher={"name": "mlp", "hidden_sizes": [8]}, target_mean=8,
+                    pool_size=12, task_samples="pool", chunk_size="task")
     return dict(paradigm="class_remap", data=data,
                 model=dict(name="mlp", hidden_sizes=[12], dropout=.1),
                 method=method or dict(name="backprop"), optimizer=dict(name="adam", lr=.01),
@@ -41,6 +42,24 @@ def test_exact_training_resume(tmp_path: Path) -> None:
     resumed = train(resume=tmp_path / "resumed/checkpoints/update_5.pt")
     assert_state_equal(full["learner_state"], resumed["learner_state"])
     assert_state_equal(full["consumer_state"], resumed["consumer_state"])
+
+
+@pytest.mark.parametrize("family", ["teacher", "sine_teacher"])
+@pytest.mark.parametrize("stop", [6, 7])
+def test_regression_training_resume_at_and_after_task_boundary(tmp_path: Path, family: str, stop: int) -> None:
+    config = recipe(tmp_path / "full", regression=True)
+    config["data"].update(num_tasks=3, target_family=family, target_mean=[0, 4, 8], target_scale=[1, 2, 0.5])
+    if family == "sine_teacher":
+        config["data"]["omega"] = [3, 5, 7]
+    full = train(config)
+    config["output_dir"] = str(tmp_path / "resumed")
+    partial = train(config, stop_after_updates=stop)
+    assert partial["source_update"] == stop
+    resumed = train(resume=tmp_path / f"resumed/checkpoints/update_{stop}.pt")
+    assert resumed["source_update"] == 18
+    assert_state_equal(full["learner_state"], resumed["learner_state"])
+    assert_state_equal(full["consumer_state"], resumed["consumer_state"])
+    assert_state_equal(full["paradigm_state"], resumed["paradigm_state"])
 
 
 def test_teacher_classification_fixed_targets_and_optimizer_policy(tmp_path: Path) -> None:
@@ -100,12 +119,16 @@ def test_scheduled_probe_and_fresh_window_do_not_change_primary_training(tmp_pat
 
 
 def test_offset_exact_inputs_independent_offsets_and_regression_teacher(tmp_path: Path) -> None:
-    source = train(recipe(tmp_path / "source", regression=True))
+    training = recipe(tmp_path / "source", regression=True)
+    training["data"].update(num_tasks=2, target_family="sine_teacher", target_mean=[8, 16],
+                            target_scale=[1, 2], omega=[3, 5])
+    source = train(training)
     fixed = source["paradigm_state"]["fixed_regression"]
     config = OffsetProbeConfig(updates=2, batch_size=4, eval_every_updates=1)
     offset_probe(config, source, tmp_path / "offset", seed=9)
     artifacts = [torch.load(p, weights_only=False) for p in (tmp_path / "offset").glob("**/fitting_data.pt")]
     assert len(artifacts) == 2
+    assert {artifact["target_offset"] for artifact in artifacts} == {0, 16}
     for artifact in artifacts:
         assert torch.equal(artifact["inputs"], fixed["inputs"])
         assert abs(float(artifact["targets"].mean()) - artifact["target_offset"]) < 1e-6

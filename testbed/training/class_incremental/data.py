@@ -1,4 +1,4 @@
-"""Nested availability, paper-style mixed partitions, and arrival mixtures."""
+"""Nested availability and smooth arrival mixtures."""
 
 from __future__ import annotations
 
@@ -50,34 +50,6 @@ def resolve_sizes(values: Sequence[int | float | str], maximum: int, *, classes:
     if any(b <= a for a, b in zip(resolved, resolved[1:])):
         raise ValueError("Nested stage sizes must be strictly increasing")
     return resolved
-
-
-def mixed_partitions(
-    pool: torch.Tensor, labels: torch.Tensor, class_order: Sequence[int], sizes: list[int],
-    fraction: float, generator: torch.Generator,
-) -> list[torch.Tensor]:
-    """P02 Appendix A.3: disjoint IID and class components, then cumulative unions.
-
-    Exact requested totals constrain the partition. An incompatible class grouping
-    is rejected rather than moving examples between the two components.
-    """
-    full_sizes = sizes if sizes[-1] == len(pool) else [*sizes, len(pool)]
-    increments = [full_sizes[0], *[b - a for a, b in zip(full_sizes, full_sizes[1:])]]
-    shuffled = pool[torch.randperm(len(pool), generator=generator)]
-    n_uniform = math.floor(fraction * len(pool))
-    uniform, grouped = shuffled[:n_uniform], shuffled[n_uniform:]
-    class_groups = torch.tensor_split(torch.tensor(class_order), len(increments))
-    partitions, cursor = [], 0
-    for size, classes in zip(increments, class_groups):
-        fixed = grouped[torch.isin(labels[grouped], classes)]
-        missing = size - len(fixed)
-        if missing < 0 or cursor + missing > len(uniform):
-            raise ValueError("Mixed class partitions cannot realize stage_sizes; change totals or uniform_fraction")
-        partitions.append(torch.cat([fixed, uniform[cursor:cursor + missing]]))
-        cursor += missing
-    if cursor != len(uniform) or sum(map(len, partitions)) != len(pool):
-        raise ValueError("Mixed arrival partitions do not cover the master pool")
-    return [torch.cat(partitions[:i + 1]) for i in range(len(sizes))]
 
 
 def mixture_alpha(

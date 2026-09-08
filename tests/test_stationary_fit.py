@@ -32,27 +32,30 @@ def fit_objective(
 
 @pytest.mark.parametrize("family", ["class_remap", "pixel_permutation", "class_incremental"])
 def test_stationary_classification_objectives_are_learnable(family: str) -> None:
-    config = dict(dataset="synthetic", task_samples="pool", chunk_size="task", epochs=None,
-                  updates=100, validation_fraction=0,
-                  data_options=dict(n_train=24, n_test=12, num_classes=3, input_shape=[1, 4, 4]))
+    labels = torch.arange(24) % 3
+    inputs = torch.eye(16)[labels].reshape(24, 1, 4, 4)
+    data = tensor_bundle(inputs, labels, inputs[:12], labels[:12], name="orthogonal_classes")
+    config = dict(dataset="orthogonal_classes", task_samples="pool", chunk_size="task", epochs=None,
+                  updates=100, validation_fraction=0)
     if family == "class_incremental":
         config.update(stage_sizes=[3], class_order=[2, 0, 1])
     else:
         config.update(num_tasks=1)
-    paradigm = make_paradigm(family, config, seed=4)
+    paradigm = make_paradigm(family, config, seed=4, datasets=data)
     initial, terminal, updates = fit_objective(paradigm, hidden_sizes=[16], batch_size=24, lr=0.03)
     assert updates == 100
     assert terminal < 0.01 and terminal < initial / 100
 
 
-def test_s05_fixed_iid_scalar_targets_are_learnable() -> None:
+@pytest.mark.parametrize("family", ["teacher", "sine_teacher"])
+def test_s05_fixed_teacher_targets_are_learnable(family: str) -> None:
     # Independent input coordinates make this random finite target problem
     # representable by a scalar linear readout, including its nonzero mean.
     inputs = torch.eye(8).reshape(8, 1, 2, 4)
     labels = torch.arange(8) % 2
     data = tensor_bundle(inputs, labels, inputs, labels, name="orthogonal")
     config = dict(dataset="orthogonal", num_tasks=1, first_mapping="identity",
-                  target_mode="fixed_regression", target_family="iid_normal",
+                  target_mode="fixed_regression", target_family=family, teacher={"name": "mlp", "hidden_sizes": []},
                   target_mean=3.0, target_scale=0.5, validation_fraction=0,
                   task_samples="pool", chunk_size="task", epochs=None, updates=150)
     paradigm = make_paradigm("class_remap", config, seed=4, datasets=data)

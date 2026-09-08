@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 import torch
 import yaml
+from test_data import bundle
 from test_integration_probes import recipe
 
 from testbed.core.checkpoint import load_checkpoint
 from testbed.core.trainer import train
+from testbed.data import DATASETS
 from testbed.suite import run_suite
 
 
@@ -40,14 +43,15 @@ def test_experiment_grid_aggregates_independent_seeds(tmp_path: Path) -> None:
     assert all(s["seeds"] == 2 and s["family"] == "class_remap" for s in summary)
 
 
-def test_target_size_branches_start_from_identical_source_state(tmp_path: Path) -> None:
+def test_target_size_branches_start_from_identical_source_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source, target = bundle("source", labels=(0, 1, 2)), bundle("target", labels=(0, 1, 2))
+    monkeypatch.setitem(DATASETS, "mnist", lambda root: source)
+    monkeypatch.setitem(DATASETS, "fashion_mnist", lambda root: target)
     config = recipe(tmp_path / "unused")
     config["paradigm"] = "class_incremental"
-    config["data"] = dict(dataset="synthetic", target_dataset="synthetic", progression="transfer",
+    config["data"] = dict(dataset="mnist", target_dataset="fashion_mnist", progression="transfer",
                            stage_sizes=[12, 12], task_samples="pool", chunk_size="task", epochs=None,
-                           updates=[3, 2], validation_fraction=0,
-                           data_options=dict(n_train=24, n_test=8, num_classes=3, input_shape=[1, 4, 4]),
-                           target_data_options=dict(n_train=24, n_test=8, num_classes=3, input_shape=[1, 4, 4]))
+                           updates=[3, 2], validation_fraction=0)
     path = tmp_path / "source.yaml"
     path.write_text(yaml.safe_dump(config))
     run_suite(dict(kind="transfer_branches", source_recipe=str(path), source_update=3,

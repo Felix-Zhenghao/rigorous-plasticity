@@ -5,7 +5,7 @@
 ### Dataset Classes
 
 - **`RemappedData`** supplies selected images with remapped class labels for cross-entropy training (`target_mode="native"`). Within a task, images from the same original class receive the same emitted label, and different classes receive different labels. The mapping can change between tasks.
-- **`FixedRegressionData`** stores input tensors and one fixed numerical target per image for MSE training (`target_mode="fixed_regression"`). Original class labels do not determine these targets. Repeated visits return the stored inputs and targets.
+- **`FixedRegressionData`** stores input tensors and one numerical target per image for MSE training (`target_mode="fixed_regression"`). Original class labels do not determine these targets. Inputs stay fixed across tasks; targets stay fixed within each task and change with its teacher.
 
 Both return `(x, target, source_id)`. `source_id` identifies the original dataset example and stays unchanged across remapping, augmentation, repeated draws, and tasks. These classes supply data for fitting; the training or probe procedure measures plasticity.
 
@@ -23,11 +23,10 @@ The selected arrivals are divided into **consecutive chunks** of `chunk_size` (`
 
 ### MSE Target Computation
 
-Fixed-regression mode uses one stationary task (`num_tasks=1`, `first_mapping="identity"`) and the entire fixed pool in one chunk (`pool_refresh="fixed"`, `task_samples="pool"`, `chunk_size="task"`, or equal numeric sizes). It requires `sampling="without_replacement"`, `class_probs=None`, and `augmentation="none"`.
+Fixed-regression mode fits the same input tensors across `num_tasks` tasks. At each task boundary, it independently reinitializes the teacher's weights and generates a new target set. Each task uses the entire fixed pool in one chunk (`pool_refresh="fixed"`, `task_samples="pool"`, `chunk_size="task"`, or equal numeric sizes). It requires `first_mapping="identity"`, `sampling="without_replacement"`, `class_probs=None`, and `augmentation="none"`. A single task remains a stationary fitting control.
 
-First generate one base value `z_i` for each selected input `x_i`, according to `target_family`:
+For each task, generate one base value `z_i` for each selected input `x_i`, according to `target_family`:
 
-- **`iid_normal`**: draw an independent standard-normal value, `z_i ~ N(0, 1)`.
 - **`teacher`**: use `z_i = teacher(x_i)`, where `teacher` specifies a randomly initialized, frozen network with one scalar output.
 - **`sine_teacher`**: use `z_i = sin(omega * teacher(x_i))`; `omega` controls how rapidly the target oscillates with the teacher's output.
 
@@ -38,9 +37,27 @@ c   = mean(z over the fixed training set) if center_targets else 0
 y_i = target_mean + target_scale * (z_i - c)
 ```
 
-Centering makes the training targets' mean equal to `target_mean`. `target_scale` multiplies the residuals without normalizing their variance; zero makes every target equal to `target_mean`. With centering disabled, `target_mean` is simply an additive offset. This offset stays constant during fitting. Defaults are `iid_normal`, centering enabled, scale 1, and offset 0.
+Centering makes each task's training targets' mean equal to `target_mean`. `target_scale` multiplies the residuals without normalizing their variance; zero makes every target equal to `target_mean`. With centering disabled, `target_mean` is simply an additive offset. Defaults are `teacher`, centering enabled, scale 1, and offset 0. Both target families require a `teacher` architecture recipe.
 
-Targets are generated once, stored alongside their inputs and IDs, and reused throughout fitting. Validation/test targets use the same training centering value: teacher families reuse the same teacher, while `iid_normal` draws separate fixed values for each split. The learner trains its scalar predictions against these targets using MSE.
+`target_mean`, `target_scale`, and `omega` each accept a scalar for all tasks or a list of exactly `num_tasks` values. Scheduled values change only at task boundaries; `omega` applies only to `sine_teacher`. For example:
+
+```yaml
+data:
+  dataset: mnist
+  num_tasks: 3
+  first_mapping: identity
+  pool_size: 1000
+  task_samples: pool
+  chunk_size: task
+  target_mode: fixed_regression
+  target_family: sine_teacher
+  teacher: {name: mlp, hidden_sizes: [100, 100]}
+  target_mean: [0, 8, 16]
+  target_scale: [1, 1, 2]
+  omega: [100000, 10000, 1000]
+```
+
+Targets are cached within each task and keyed by unchanged source IDs. Validation and test use the active task's teacher, target parameters, and training centering value. Checkpoints save that task's exact inputs, targets, residuals, resolved parameters, and teacher seed, so evaluation, resume, and offset refits use the same target function. Teacher seeds are independent of target offsets, scales, and frequencies. Class-mapping recurrence does not repeat teachers.
 
 Implementation: [configuration](rigorous-plasticity/testbed/training/class_remap/config.py), [dataset classes and target generators](rigorous-plasticity/testbed/training/class_remap/data.py), [task construction](rigorous-plasticity/testbed/training/class_remap/paradigm.py), and [chunk/minibatch scheduling](rigorous-plasticity/testbed/core/consumption.py).
 
@@ -61,3 +78,9 @@ The selected arrivals are divided into **consecutive chunks** of `chunk_size` (`
 `num_tasks` sets the task count. `task_samples`, `chunk_size`, `epochs`, `updates`, and `permuted_fraction` can vary by task; `class_probs` can have one row per task. With recurrence enabled, the `permuted_fraction` schedule must repeat with the permutation bank. Inputs are resized according to `resize`, augmented if configured, then permuted. `normalization="dataset_stats"` applies channel standardization afterward. Training augmentation is applied anew on each visit; validation and test use no augmentation.
 
 Implementation: [configuration](rigorous-plasticity/testbed/training/pixel_permutation/config.py), [PermutedData](rigorous-plasticity/testbed/training/pixel_permutation/data.py), [task construction](rigorous-plasticity/testbed/training/pixel_permutation/paradigm.py), [input preprocessing](rigorous-plasticity/testbed/data/datasets.py), and [chunk/minibatch scheduling](rigorous-plasticity/testbed/core/consumption.py).
+
+## class incremental learning
+
+Class incremental training uses real datasets for both source and transfer target. `progression="classes"` expands the available class set, `"examples"` expands a nested example pool, and `"transfer"` switches to target-only data. The complete configured output space exists from initialization.
+
+For example expansion, `arrival_order="iid"` takes prefixes of a random pool order; `"class_ordered"` groups the pool by `class_order` before taking prefixes. These are the two supported arrival orders. Smooth transitions can mix the old pool with the expanded pool using `linear`, `exponential`, or `explicit` coefficients, with replacement sampling. Each sampled arrival stays fixed during repeated fitting.

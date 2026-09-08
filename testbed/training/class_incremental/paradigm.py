@@ -12,7 +12,7 @@ from testbed.data.datasets import DatasetInput, load_dataset, prepare_data
 from testbed.data.sampling import probabilities, realized_proportions, sample_indices, scheduled
 
 from .config import ClassIncrementalConfig
-from .data import IncrementalData, mixed_partitions, mixture_arrivals, resolve_sizes
+from .data import IncrementalData, mixture_arrivals, resolve_sizes
 
 
 class ClassIncremental:
@@ -27,7 +27,7 @@ class ClassIncremental:
         for i, name in enumerate(names):
             bundle = datasets.get(name) if isinstance(datasets, dict) else datasets if i == 0 else None
             options = config.data_options if i == 0 else config.target_data_options
-            bundle = bundle or load_dataset(name, data_root, seed=seed + i, options=options)
+            bundle = bundle or load_dataset(name, data_root, options=options)
             splits, metadata = prepare_data(bundle, config, seed=seed + i)
             self.bundles.append(bundle)
             self.sources.append(splits)
@@ -108,14 +108,11 @@ class ClassIncremental:
                 raise ValueError("An incremental class pool is empty")
             return pools, support
         sizes = resolve_sizes(config.stage_sizes, len(pool))
-        if config.arrival_order == "mixed":
-            pools = mixed_partitions(pool, labels, self.class_order, sizes, config.uniform_fraction, self._rng(3))
+        if config.arrival_order == "class_ordered":
+            pool = torch.cat([pool[labels[pool] == c] for c in self.class_order])
         else:
-            if config.arrival_order == "class_ordered":
-                pool = torch.cat([pool[labels[pool] == c] for c in self.class_order])
-            else:
-                pool = pool[torch.randperm(len(pool), generator=self._rng(3))]
-            pools = [pool[:size] for size in sizes]
+            pool = pool[torch.randperm(len(pool), generator=self._rng(3))]
+        pools = [pool[:size] for size in sizes]
         return pools, [set(self.bundles[0].output_ids) for _ in sizes]
 
     def _budget(self, index: int) -> tuple[int, int]:

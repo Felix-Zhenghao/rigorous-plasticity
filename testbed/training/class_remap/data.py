@@ -1,4 +1,4 @@
-"""Class-label views and the stationary S05 target construction."""
+"""Class-label views and fixed targets from each task's frozen teacher."""
 
 from __future__ import annotations
 
@@ -44,26 +44,22 @@ class FixedRegressionData(Dataset[tuple[torch.Tensor, torch.Tensor, torch.Tensor
 
 
 def draw_base_targets(inputs: torch.Tensor, generator_config: dict[str, Any], *, seed: int) -> torch.Tensor:
+    from testbed.core.factory import make_network
+
     family = generator_config["target_family"]
-    if family == "iid_normal":
-        values = torch.randn((len(inputs), 1), generator=torch.Generator().manual_seed(seed))
-    else:
-        from testbed.core.factory import make_network
-        config = dict(generator_config["teacher"])
-        architecture = config.pop("name", config.pop("architecture", "mlp"))
-        model_config = config.pop("model_config", config)
-        problem = ProblemSpec(tuple(inputs.shape[1:]), "mse", (0,))
-        teacher = make_network(architecture, problem=problem, model_config=model_config, seed=seed)
-        teacher.requires_grad_(False).eval()
-        with torch.no_grad():
-            values = torch.cat([teacher(batch) for batch in inputs.split(512)]).cpu()
-        if values.shape != (len(inputs), 1):
-            raise ValueError("S05 teacher must have a scalar output")
-        if family == "sine_teacher":
-            values = torch.sin(generator_config["omega"] * values)
-        elif family != "teacher":
-            raise ValueError(f"Unknown target family {family!r}")
-    return values
+    if family not in {"teacher", "sine_teacher"}:
+        raise ValueError(f"Unknown target family {family!r}")
+    config = dict(generator_config["teacher"])
+    architecture = config.pop("name", config.pop("architecture", "mlp"))
+    model_config = config.pop("model_config", config)
+    problem = ProblemSpec(tuple(inputs.shape[1:]), "mse", (0,))
+    teacher = make_network(architecture, problem=problem, model_config=model_config, seed=seed)
+    teacher.requires_grad_(False).eval()
+    with torch.no_grad():
+        values = torch.cat([teacher(batch) for batch in inputs.split(512)]).cpu()
+    if values.shape != (len(inputs), 1):
+        raise ValueError("Regression teacher must have a scalar output")
+    return torch.sin(generator_config["omega"] * values) if family == "sine_teacher" else values
 
 
 def draw_residuals(inputs: torch.Tensor, generator_config: dict[str, Any], *, seed: int) -> torch.Tensor:

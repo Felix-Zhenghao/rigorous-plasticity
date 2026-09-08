@@ -36,7 +36,7 @@ The [configuration guide](docs/configuration.md) links every configuration class
 
 | Family | Behavior | Recipes |
 |---|---|---|
-| S02 | Class remapping, stable classes, recurrence, fixed scalar-target pretraining | `s02_stream.yaml`, `s05_pretrain.yaml` |
+| S02 | Class remapping, stable classes, recurrence, changing teachers on fixed regression inputs | `s02_stream.yaml`, `s05_pretrain.yaml` |
 | S07/S08 | Spatial/all-value pixel permutations, partial changes and recurrence | `pixel_online.yaml` |
 | S12–S16 | Nested class/example pools, smooth mixtures, target-only transfer | `s12_class_incremental.yaml` through `s16_transfer.yaml` |
 | S03 | Fixed same-architecture random-teacher targets on seen or unseen inputs | `s03_teacher.yaml` |
@@ -45,6 +45,8 @@ The [configuration guide](docs/configuration.md) links every configuration class
 For a task with `N` arrivals, `chunk_size=M`, `epochs=K`, and `trainer.batch_size=B`, updates equal `sum(K * ceil(chunk_length / B))`. `epochs: null` with `updates: U` instead allocates exactly U updates per chunk. Short minibatches stay within their pass and chunk. Replacement draws are fixed arrival positions, so replaying a position preserves its input identity and target. Training augmentation is seeded by logical visit independently of worker prefetching.
 
 All configured output labels exist from initialization. Class expansion retains old examples; smooth transitions mix the old pool with the full expanded pool. S16 keeps the entire learner state and trains only on target inputs after source consumption. `transfer_suite.yaml` selects the source checkpoint by an explicit global update and branches target subset sizes from it.
+
+Regression supports `teacher` and `sine_teacher` targets, with fresh teacher weights at every task boundary. `target_mean`, `target_scale`, and sine frequency `omega` accept a scalar or one value per task. Inputs stay fixed, and held-out targets follow the active teacher. The S05 pretraining recipe uses one task as a stationary control. Class incremental training uses real datasets and supports `iid` or `class_ordered` example arrival.
 
 All methods support MLP and ResNet-18: `backprop`, `l2`, `l2_init`, `infer`, `feature_norm`, `c_chain`, `spectral`, `shrink_perturb`, `cbp`, `redo`, `swr`, `fire`, `layer_norm`, `leaky_relu`, `nap`, and `optimizer_reset`. ViT supports the subset listed in [the model notes](docs/models_methods.md). Each method owns its configuration, update arithmetic, architecture-specific access, persistent state, and optimizer changes. The trainer contains no method dispatch during learning.
 
